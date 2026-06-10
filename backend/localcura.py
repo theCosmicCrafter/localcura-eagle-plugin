@@ -662,7 +662,11 @@ class LocalCuraApp:
             cached = _get_cached(contents)
             if cached:
                 logger.info("Cache hit for %s", filename)
-                return {**cached, "cached": True}
+                # Sanitize cached tags in case they were stored with old prefixes
+                result = dict(cached)
+                if "tags" in result and isinstance(result["tags"], list):
+                    result["tags"] = sanitize_tags(result["tags"])
+                return {**result, "cached": True}
 
         # Validate file size
         if not validate_file_size(contents):
@@ -718,6 +722,12 @@ class LocalCuraApp:
                     result["tags"] = result["verified_tags"]["cleaned"]
                 
                 result["metadata"] = metadata
+                # Final sanitize pass on tags before caching and returning
+                if "tags" in result and isinstance(result["tags"], list):
+                    result["tags"] = sanitize_tags(result["tags"])
+                if "verified_tags" in result and isinstance(result["verified_tags"], dict):
+                    cleaned = result["verified_tags"].get("cleaned", [])
+                    result["verified_tags"]["cleaned"] = sanitize_tags(cleaned)
                 _set_cached(contents, result)
                 return result
             except Exception as e:
@@ -733,6 +743,8 @@ class LocalCuraApp:
             text_payload = truncate_text_payload(contents)
             analysis = self.client.analyze_text(text_payload, prompt)
             result = self._format_result(filename, analysis, media_kind)
+            if "tags" in result and isinstance(result["tags"], list):
+                result["tags"] = sanitize_tags(result["tags"])
             _set_cached(contents, result)
             return result
 
@@ -766,6 +778,8 @@ class LocalCuraApp:
                 # Merge analyses from all frames
                 merged_analysis = self._merge_video_analyses(all_analyses)
                 result = self._format_result(filename, merged_analysis, media_kind)
+                if "tags" in result and isinstance(result["tags"], list):
+                    result["tags"] = sanitize_tags(result["tags"])
                 _set_cached(contents, result)
                 return result
                 
@@ -786,6 +800,8 @@ class LocalCuraApp:
                 analysis = self.client.analyze_text(text_payload, prompt)
                 result = self._format_result(filename, analysis, media_kind)
                 result["audio_metadata"] = audio_info["metadata"]
+                if "tags" in result and isinstance(result["tags"], list):
+                    result["tags"] = sanitize_tags(result["tags"])
                 _set_cached(contents, result)
                 return result
             except Exception as e:
@@ -972,11 +988,53 @@ class LocalCuraApp:
         return sorted({t for t in cleaned})
 
 
+def sanitize_tags(tag_list: list[str]) -> list[str]:
+    """Final safety pass: strip any remaining prefix patterns from tags."""
+    PREFIX_PATTERNS = [
+        r"^Subject\s*[:\-]\s*",
+        r"^Genre\s*[:\-]\s*",
+        r"^Lighting\s*[:\-]\s*",
+        r"^Color[/\s]*Tone\s*[:\-]\s*",
+        r"^Time[/\s]*Season\s*[:\-]\s*",
+        r"^Similar\s*Artist\s*[:\-]\s*",
+        r"^Cinematography\s*[:\-]\s*",
+        r"^Production\s*[:\-]\s*",
+        r"^Mood\s*[:\-]\s*",
+        r"^Instrumentation\s*[:\-]\s*",
+        r"^Structure\s*[:\-]\s*",
+        r"^Topic\s*[:\-]\s*",
+        r"^Tone\s*[:\-]\s*",
+        r"^Intent\s*[:\-]\s*",
+        r"^Entity\s*[:\-]\s*",
+        r"^subjects\s*[:\-]\s*",
+        r"^genre\s*[:\-]\s*",
+        r"^lighting\s*[:\-]\s*",
+        r"^color_and_tone\s*[:\-]\s*",
+        r"^time_or_season\s*[:\-]\s*",
+    ]
+    out = []
+    for tag in tag_list:
+        if not isinstance(tag, str):
+            continue
+        tag = str(tag).strip()
+        if not tag:
+            continue
+        for pattern in PREFIX_PATTERNS:
+            tag = re.sub(pattern, "", tag, flags=re.IGNORECASE)
+        tag = tag.strip()
+        if tag and tag not in out:
+            out.append(tag)
+    return out
+
+
 # -------------------------------------------------------------------------
 # CLI & Server
 # -------------------------------------------------------------------------
 
 app_instance = LocalCuraApp()
+
+# Clear analysis cache on startup to ensure fresh results (old prefixed tags purged)
+clear_cache()
 
 # Create FastAPI app
 app = FastAPI(title="LocalCura qwen3-vl")

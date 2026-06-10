@@ -133,7 +133,7 @@ def render_prompt_from_template(
     for rule in template.get("rules", []):
         name = rule.get("name", "Rule")
         instruction = rule.get("instruction", "")
-        lines.append(f"- {name}: {instruction}")
+        lines.append(f"- {instruction}  (category: {name})")
 
     if rename_template:
         lines.append("")
@@ -148,6 +148,11 @@ def render_prompt_from_template(
     )
     lines.append(
         "Use arrays of concise tags when a rule expects multiple values; use short strings for description fields."
+    )
+    lines.append(
+        "IMPORTANT: Tag values must be plain words or short phrases ONLY. "
+        "NEVER prefix tag values with category names like 'Subject:', 'Genre:', 'Lighting:', etc. "
+        "For example, output 'black collar' NOT 'Subject: black collar', and 'portrait' NOT 'Genre: portrait'."
     )
     return "\n".join(lines)
 

@@ -308,10 +308,17 @@ function cleanTags(tags) {
         if (parts.length === 0) parts = [text];
 
         for (const part of parts) {
-            const lower = part.toLowerCase();
+            // Strip prefix patterns like "Subject: ", "Genre: "
+            let cleaned = part;
+            const prefixMatch = cleaned.match(/^(Subject|Genre|Lighting|Color/Tone|Time/Season|Similar Artist|Cinematography|Production|Mood|Instrumentation|Structure|Topic|Tone|Intent|Entity|subjects|genre|lighting|color_and_tone|time_or_season)\s*[:\-]\s*/i);
+            if (prefixMatch) {
+                cleaned = cleaned.slice(prefixMatch[0].length).trim();
+            }
+            if (!cleaned) continue;
+            const lower = cleaned.toLowerCase();
             if (TAG_STOPWORDS.has(lower)) continue;
             if (lower.length <= 2 && lower !== '3d' && lower !== 'ai') continue;
-            if (!out.includes(part)) out.push(part);
+            if (!out.includes(cleaned)) out.push(cleaned);
         }
     }
 
@@ -693,17 +700,6 @@ async function processSingleItem(item, abortController, attempt = 1) {
         // 4. Update Eagle
         let rawNewTags = result.tags || [];
 
-        if (result.type === 'audio') {
-            // Audio specific handling if needed
-        } else if (result.analysis) {
-            if (Array.isArray(result.analysis.subjects)) {
-                rawNewTags.push(...result.analysis.subjects);
-            }
-            if (result.analysis.visual_style) {
-                rawNewTags.push(result.analysis.visual_style);
-            }
-        }
-
         const cleanExisting = cleanTags(item.tags || []);
         const cleanNew = cleanTags(rawNewTags);
         const finalTags = [...new Set([...cleanExisting, ...cleanNew])];
@@ -814,14 +810,6 @@ async function processBatchChunk(items, abortController) {
 
             try {
                 let rawNewTags = result.tags || [];
-                if (result.analysis) {
-                    if (Array.isArray(result.analysis.subjects)) {
-                        rawNewTags.push(...result.analysis.subjects);
-                    }
-                    if (result.analysis.visual_style) {
-                        rawNewTags.push(result.analysis.visual_style);
-                    }
-                }
 
                 const cleanExisting = cleanTags(item.tags || []);
                 const cleanNew = cleanTags(rawNewTags);
@@ -974,10 +962,6 @@ async function propagateTags(repItem, dupIds, resultsMap) {
             if (!dupItem) continue;
             
             let rawNewTags = result.tags || [];
-            if (result.analysis) {
-                if (Array.isArray(result.analysis.subjects)) rawNewTags.push(...result.analysis.subjects);
-                if (result.analysis.visual_style) rawNewTags.push(result.analysis.visual_style);
-            }
             
             const cleanExisting = cleanTags(dupItem.tags || []);
             const cleanNew = cleanTags(rawNewTags);

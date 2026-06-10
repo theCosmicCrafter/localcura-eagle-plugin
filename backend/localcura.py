@@ -31,6 +31,13 @@ try:
 except ImportError:
     HAVE_CV2 = False
     logger.warning("OpenCV not available. Video processing will be disabled.")
+
+# Audio metadata extraction
+try:
+    from mutagen import File as MutagenFile
+    HAVE_MUTAGEN = True
+except ImportError:
+    HAVE_MUTAGEN = False
 MAX_TEXT_CHARS = 6000
 MAX_IMAGE_SIZE = (1024, 1024)  # Max dimensions for processing
 MAX_FILE_SIZE_MB = 50  # Max file size in MB
@@ -138,6 +145,51 @@ def compress_image_if_needed(image: Image.Image) -> Image.Image:
     logger.info("Compressing image from %sx%s to %sx%s", 
                 image.width, image.height, new_size[0], new_size[1])
     return image.resize(new_size, Image.LANCZOS)
+
+def extract_audio_metadata(filepath: str, contents: bytes) -> Dict[str, Any]:
+    """Extract metadata from audio bytes. Falls back to basic heuristics."""
+    info: Dict[str, Any] = {"format": Path(filepath).suffix.lower(), "duration": None, "bitrate": None, "sample_rate": None, "channels": None}
+    if HAVE_MUTAGEN:
+        try:
+            import tempfile
+            with tempfile.NamedTemporaryFile(suffix=info["format"], delete=False) as tmp:
+                tmp.write(contents)
+                tmp_path = tmp.name
+            try:
+                audio = MutagenFile(tmp_path)
+                if audio is not None:
+                    info["duration"] = getattr(audio.info, "length", None)
+                    info["bitrate"] = getattr(audio.info, "bitrate", None)
+                    info["sample_rate"] = getattr(audio.info, "sample_rate", None)
+                    info["channels"] = getattr(audio.info, "channels", None)
+                    # Tags
+                    if audio.tags:
+                        for key in ["title", "artist", "album", "genre", "date"]:
+                            val = audio.tags.get(key) or audio.tags.get(key.upper())
+                            if val:
+                                info[key] = str(val[0] if isinstance(val, list) else val)
+            finally:
+                try:
+                    os.unlink(tmp_path)
+                except:
+                    pass
+        except Exception as e:
+            logger.warning("Mutagen failed for %s: %s", filepath, e)
+    # Build description for LLM
+    parts = [f"Audio file: {Path(filepath).name}", f"Format: {info['format']}"]
+    if info["duration"] is not None:
+        parts.append(f"Duration: {info['duration']:.1f}s")
+    if info["bitrate"] is not None:
+        parts.append(f"Bitrate: {info['bitrate'] // 1000} kbps")
+    if info["sample_rate"] is not None:
+        parts.append(f"Sample rate: {info['sample_rate']} Hz")
+    if info["channels"] is not None:
+        parts.append(f"Channels: {info['channels']}")
+    for key in ["title", "artist", "album", "genre"]:
+        if key in info:
+            parts.append(f"{key.capitalize()}: {info[key]}")
+    return {"text": "\n".join(parts), "metadata": info}
+
 
 def determine_media_kind(filename: str, content_type: Optional[str]) -> str:
     suffix = Path(filename).suffix.lower()
@@ -493,12 +545,22 @@ class LocalCuraApp:
                 }
 
         if media_kind == "audio":
-            return {
-                "file": filename,
-                "media_kind": media_kind,
-                "error": "Audio analysis is not yet implemented in LocalCura.",
-                "retryable": False,
-            }
+            try:
+                audio_info = extract_audio_metadata(filename, contents)
+                text_payload = audio_info["text"]
+                prompt = self._build_prompt(media_kind)
+                analysis = self.client.analyze_text(text_payload, prompt)
+                result = self._format_result(filename, analysis, media_kind)
+                result["audio_metadata"] = audio_info["metadata"]
+                return result
+            except Exception as e:
+                logger.error("Error processing audio %s: %s", filename, e)
+                return {
+                    "file": filename,
+                    "media_kind": media_kind,
+                    "error": f"Audio processing failed: {str(e)}",
+                    "retryable": False,
+                }
 
         return {
             "file": filename,
@@ -589,6 +651,19 @@ class LocalCuraApp:
         normalized = self._normalize_analysis(analysis)
         tags = self._extract_tags(normalized)
 
+        # Compute aesthetic score (0-10) if available or inferred
+        aesthetic = 0.0
+        if "aesthetic_score" in normalized:
+            try:
+                aesthetic = float(normalized["aesthetic_score"])
+            except (ValueError, TypeError):
+                aesthetic = 0.0
+        elif "quality" in normalized:
+            # Heuristic: map quality descriptors to score
+            quality_map = {"excellent": 9, "high": 7, "good": 6, "average": 5, "low": 3, "poor": 2}
+            q = str(normalized["quality"]).lower()
+            aesthetic = quality_map.get(q, 5)
+
         return {
             "file": filename,
             "media_kind": media_kind,
@@ -596,6 +671,7 @@ class LocalCuraApp:
             "analysis": normalized,
             "suggested_name": normalized.get("suggested_name"),
             "description": normalized.get("description"),
+            "aesthetic": round(aesthetic, 1),
         }
 
     @staticmethod
@@ -637,8 +713,15 @@ app = FastAPI(title="LocalCura qwen3-vl")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
+    allow_origins=[
+        "http://localhost",
+        "http://127.0.0.1",
+        "http://localhost:8005",
+        "http://127.0.0.1:8005",
+        "file://",
+        "null",
+    ],
+    allow_methods=["POST", "GET", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -651,6 +734,29 @@ def health():
 @app.post("/process")
 def process(file: UploadFile = File(...)):
     return app_instance.process_upload(file)
+
+
+@app.post("/process/batch")
+async def process_batch(files: List[UploadFile] = File(...)):
+    """Process multiple files in one request."""
+    results = []
+    errors = []
+    for file in files:
+        try:
+            result = app_instance.process_upload(file)
+            results.append(result)
+            if "error" in result:
+                errors.append({"file": file.filename, "error": result["error"]})
+        except Exception as e:
+            logger.error("Batch processing failed for %s: %s", file.filename, e)
+            errors.append({"file": file.filename, "error": str(e)})
+            results.append({"file": file.filename, "error": str(e)})
+    return {
+        "total": len(files),
+        "processed": len(results),
+        "errors": errors,
+        "results": results,
+    }
 
 
 # -------------------------------------------------------------------------

@@ -8,10 +8,70 @@ if (typeof eagle === 'undefined') {
 const API_URL = "http://127.0.0.1:8005";
 const child_process = require('child_process');
 const path = require('path');
+const fs = require('fs');
 
-// Config - Adjust path as needed
-const PROJECT_ROOT = "c:\\Users\\richk\\CascadeProjects\\localcura-eagle-plugin";
-const VENV_PYTHON = path.join(PROJECT_ROOT, "venv", "Scripts", "python.exe");
+// Dynamic path detection
+let PROJECT_ROOT = "";
+let VENV_PYTHON = "";
+
+function detectProjectRoot() {
+    // Eagle plugin path points to eagle_plugin/ folder; project root is its parent
+    try {
+        const pluginPath = eagle.plugin.path;
+        if (pluginPath) {
+            return path.dirname(pluginPath);
+        }
+    } catch (e) {
+        console.warn("Could not detect plugin path:", e);
+    }
+    // Fallback: use current working directory if it looks right
+    const cwd = process.cwd();
+    if (fs.existsSync(path.join(cwd, "backend", "localcura.py"))) {
+        return cwd;
+    }
+    return "";
+}
+
+function detectPythonPath(projectRoot) {
+    const platform = process.platform;
+    // Try venv first
+    if (platform === 'win32') {
+        const venvPy = path.join(projectRoot, 'venv', 'Scripts', 'python.exe');
+        if (fs.existsSync(venvPy)) return venvPy;
+    } else {
+        const venvPy = path.join(projectRoot, 'venv', 'bin', 'python');
+        if (fs.existsSync(venvPy)) return venvPy;
+    }
+    // Try system Python from PATH
+    const candidates = platform === 'win32'
+        ? ['python.exe', 'python3.exe', 'py']
+        : ['python3', 'python'];
+    for (const py of candidates) {
+        try {
+            child_process.execSync(`${py} --version`, { stdio: 'ignore' });
+            return py;
+        } catch {
+            continue;
+        }
+    }
+    return 'python';
+}
+
+function ensurePaths() {
+    if (!PROJECT_ROOT) {
+        PROJECT_ROOT = detectProjectRoot();
+    }
+    if (!VENV_PYTHON) {
+        VENV_PYTHON = detectPythonPath(PROJECT_ROOT);
+    }
+    // Persist for next session
+    if (PROJECT_ROOT) {
+        settings.projectRoot = PROJECT_ROOT;
+    }
+    if (VENV_PYTHON) {
+        settings.pythonPath = VENV_PYTHON;
+    }
+}
 
 // State
 let isProcessing = false;
@@ -44,6 +104,8 @@ const DEFAULT_SETTINGS = {
     enableResume: true,
     enableProgressiveEnhancement: false,  // Off by default (3-stage tagging)
     autoStartServer: true,
+    projectRoot: '',
+    pythonPath: '',
 };
 
 // Load settings from Eagle storage
@@ -234,6 +296,15 @@ function toggleServer() {
 
 async function startServer() {
     if (serverProcess) return;
+
+    // Ensure we know where the backend lives
+    if (!PROJECT_ROOT || !VENV_PYTHON) {
+        ensurePaths();
+    }
+    if (!PROJECT_ROOT) {
+        toast("Cannot locate backend. Please set project root in settings.", "error");
+        return;
+    }
 
     serverState = 'starting';
     updateUIState();
@@ -529,13 +600,13 @@ async function processSingleItem(item, abortController, attempt = 1) {
         const cleanNew = cleanTags(rawNewTags);
         const finalTags = [...new Set([...cleanExisting, ...cleanNew])];
 
-        // Rating
+        // Rating: map backend aesthetic (0-10) to Eagle stars (1-5)
         let rating = typeof item.star === 'number' ? item.star : 0;
         if (result.type !== 'audio' && typeof result.aesthetic === 'number') {
             const score = result.aesthetic;
-            rating = Math.round(score / 2);
+            rating = Math.max(1, Math.min(5, Math.round(score / 2)));
         }
-        rating = Math.max(0, Math.min(5, Math.floor(rating)));
+        rating = Math.max(1, Math.min(5, Math.floor(rating)));
 
         // Save changes
         item.tags = finalTags;
@@ -616,9 +687,10 @@ async function processImages() {
     // Populate Queue with Pending items
     items.forEach(item => createQueueItem(item));
     
+    const processedIds = [];
     // Save batch state for resume capability
     if (settings.enableResume) {
-        saveBatchState(items, 0);
+        saveBatchState(items, processedIds);
     }
 
     const chunkSize = CHUNK_SIZE();
@@ -653,7 +725,8 @@ async function processImages() {
             
             // Save progress for resume
             if (settings.enableResume && result.success) {
-                saveBatchState(items, processedCount);
+                processedIds.push(chunk[i].id);
+                saveBatchState(items, processedIds);
             }
 
             // Small delay between items within a chunk (except the last one)
@@ -686,11 +759,11 @@ function finishProcessing() {
 }
 
 // Persistence functions for resume capability
-async function saveBatchState(items, processedCount) {
+async function saveBatchState(items, processedIds) {
     try {
         const state = {
             items: items.map(item => ({ id: item.id, name: item.name, filePath: item.filePath, ext: item.ext })),
-            processedCount,
+            processedIds: processedIds || [],
             timestamp: Date.now(),
             totalItems: items.length
         };
@@ -704,7 +777,13 @@ async function loadBatchState() {
     try {
         const stored = await eagle.storage.getItem(PERSISTENCE_KEY);
         if (stored) {
-            return JSON.parse(stored);
+            const state = JSON.parse(stored);
+            // Migrate old count-based state to ID-based
+            if (state.processedCount !== undefined && !state.processedIds) {
+                state.processedIds = state.items.slice(0, state.processedCount).map(i => i.id);
+                delete state.processedCount;
+            }
+            return state;
         }
     } catch (e) {
         console.warn('Failed to load batch state:', e);
@@ -826,6 +905,22 @@ function toggleSettingsPanel() {
                            onchange="updateSetting('enableCompression', this.checked)">
                     Image Compression
                 </label>
+            </div>
+            <div class="setting-group">
+                <h4>Backend</h4>
+                <label>
+                    Project Root:
+                    <input type="text" id="projectRootInput" value="${settings.projectRoot || ''}" 
+                           style="width:100%;background:var(--bg-app);color:var(--text-main);border:1px solid var(--border-subtle);border-radius:4px;padding:4px;"
+                           onchange="updateSetting('projectRoot', this.value)">
+                </label>
+                <label>
+                    Python Path:
+                    <input type="text" id="pythonPathInput" value="${settings.pythonPath || ''}" 
+                           style="width:100%;background:var(--bg-app);color:var(--text-main);border:1px solid var(--border-subtle);border-radius:4px;padding:4px;"
+                           onchange="updateSetting('pythonPath', this.value)">
+                </label>
+                <small style="color:var(--text-dim);display:block;margin-top:4px;">Leave blank to auto-detect on next start.</small>
             </div>
             <div class="setting-actions">
                 <button onclick="saveSettings(); toggleSettingsPanel(); toast('Settings saved', 'success');">Save</button>

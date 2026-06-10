@@ -19,6 +19,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
+import colorsys
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff", ".gif", ".avif", ".heic"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".flv", ".wmv", ".m4v"}
@@ -171,7 +172,169 @@ def compress_image_if_needed(image: Image.Image) -> Image.Image:
                 image.width, image.height, new_size[0], new_size[1])
     return image.resize(new_size, Image.LANCZOS)
 
-def extract_audio_metadata(filepath: str, contents: bytes) -> Dict[str, Any]:
+class MetadataExtractor:
+    """Extract ComfyUI/Stable Diffusion metadata from PNG/JPG."""
+
+    @staticmethod
+    def extract_comfyui_metadata(image_path: Path) -> Dict[str, Any]:
+        metadata = {}
+        try:
+            with Image.open(image_path) as img:
+                if img.format == 'PNG' and hasattr(img, 'info'):
+                    for key in ['parameters', 'prompt', 'workflow', 'comfyui']:
+                        if key in img.info:
+                            try:
+                                metadata['prompt'] = json.loads(img.info[key])
+                            except:
+                                metadata['prompt'] = img.info[key]
+                            metadata['ai_generated'] = True
+                            metadata['generator'] = 'comfyui'
+                            break
+                    if 'parameters' in img.info:
+                        params = img.info['parameters']
+                        if 'Steps:' in params or 'Sampler:' in params:
+                            parts = params.split('Negative prompt:')
+                            metadata['prompt'] = parts[0].strip()
+                            if len(parts) > 1:
+                                metadata['negative_prompt'] = parts[1].split('Steps:')[0].strip()
+                            metadata['ai_generated'] = True
+                            metadata['generator'] = 'stable-diffusion'
+                            for param in ['Steps', 'Sampler', 'CFG scale', 'Seed', 'Size']:
+                                if f'{param}:' in params:
+                                    try:
+                                        value = params.split(f'{param}:')[1].split(',')[0].strip()
+                                        metadata[param.lower().replace(' ', '_')] = value
+                                    except:
+                                        pass
+                metadata['width'] = img.width
+                metadata['height'] = img.height
+                metadata['format'] = img.format
+        except Exception as e:
+            logger.warning("Metadata extraction failed for %s: %s", image_path, e)
+        return metadata
+
+
+class ColorExtractor:
+    """Extract dominant color palette using PIL quantize (no sklearn needed)."""
+
+    def __init__(self, n_dominant: int = 5):
+        self.n_dominant = n_dominant
+
+    def extract(self, image: Image.Image) -> Dict[str, Any]:
+        try:
+            small = image.resize((150, 150), Image.LANCZOS).convert('RGB')
+            quantized = small.quantize(colors=self.n_dominant, method=2)
+            palette = quantized.getpalette()[:self.n_dominant * 3]
+            colors = []
+            for i in range(self.n_dominant):
+                r, g, b = palette[i * 3:i * 3 + 3]
+                colors.append({"hex": f"#{r:02x}{g:02x}{b:02x}", "rgb": [r, g, b]})
+            # Classify palette
+            palette_type = self._classify(colors)
+            return {"dominant": colors, "palette_type": palette_type}
+        except Exception as e:
+            logger.warning("Color extraction failed: %s", e)
+            return {}
+
+    @staticmethod
+    def _classify(colors: List[Dict]) -> str:
+        if not colors:
+            return "unknown"
+        hues, sats, vals = [], [], []
+        for c in colors:
+            r, g, b = [x / 255.0 for x in c['rgb']]
+            h, s, v = colorsys.rgb_to_hsv(r, g, b)
+            hues.append(h)
+            sats.append(s)
+            vals.append(v)
+        avg_sat = sum(sats) / len(sats)
+        avg_val = sum(vals) / len(vals)
+        if avg_sat < 0.15:
+            return "monochrome"
+        if avg_val > 0.7 and avg_sat > 0.5:
+            return "vibrant"
+        if avg_val < 0.4:
+            return "dark"
+        hue_std = max(hues) - min(hues)
+        if hue_std < 0.1:
+            return "warm" if 0.0 < sum(hues) / len(hues) < 0.15 or 0.9 < sum(hues) / len(hues) < 1.0 else "cool"
+        return "mixed"
+
+
+class TagVerifier:
+    """3-layer tag verification: normalize, filter, quality-score."""
+
+    STOPWORDS = {
+        'a', 'an', 'the', 'and', 'or', 'of', 'to', 'in', 'on', 'for', 'from',
+        'with', 'by', 'at', 'as', 'is', 'are', 'was', 'were', 'be', 'been',
+        'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would',
+        'could', 'should', 'may', 'might', 'must', 'shall', 'can', 'need',
+        'dare', 'ought', 'used', 'this', 'that', 'these', 'those', 'i', 'you',
+        'he', 'she', 'it', 'we', 'they', 'me', 'him', 'her', 'us', 'them',
+        'image', 'photo', 'picture', 'photograph', 'shot', 'scene', 'view',
+        'file', 'media', 'asset', 'subject', 'subjects', 'context',
+    }
+
+    def __init__(self, max_tags: int = 30, min_len: int = 2, max_len: int = 25):
+        self.max_tags = max_tags
+        self.min_len = min_len
+        self.max_len = max_len
+
+    def verify(self, raw_tags: List[str]) -> Dict[str, Any]:
+        # Layer 1: Normalize
+        normalized = self._normalize(raw_tags)
+        # Layer 2: Filter
+        filtered = self._filter(normalized)
+        # Layer 3: Quality score
+        score, issues = self._score(filtered, normalized)
+        return {
+            "original": raw_tags,
+            "cleaned": filtered,
+            "quality_score": score,
+            "issues": issues,
+        }
+
+    def _normalize(self, tags: List[str]) -> List[str]:
+        out = []
+        for t in tags:
+            s = str(t).strip().lower()
+            s = re.sub(r'[^a-z0-9\s\-/#]', '', s)
+            s = re.sub(r'\s+', ' ', s)
+            if s:
+                out.append(s)
+        return out
+
+    def _filter(self, tags: List[str]) -> List[str]:
+        out = []
+        seen = set()
+        for t in tags:
+            if t in self.STOPWORDS:
+                continue
+            if len(t) < self.min_len or len(t) > self.max_len:
+                continue
+            if t in seen:
+                continue
+            seen.add(t)
+            out.append(t)
+        return out[:self.max_tags]
+
+    def _score(self, final: List[str], original: List[str]) -> Tuple[float, List[str]]:
+        issues = []
+        score = 1.0
+        if len(final) < 3:
+            issues.append("too_few_tags")
+            score -= 0.2
+        if len(final) > self.max_tags:
+            issues.append("too_many_tags")
+            score -= 0.1
+        dedup_ratio = len(final) / max(len(original), 1)
+        if dedup_ratio < 0.5:
+            issues.append("high_duplication")
+            score -= 0.15
+        return max(0.0, score), issues
+
+
+def extract_audio_metadata
     """Extract metadata from audio bytes. Falls back to basic heuristics."""
     info: Dict[str, Any] = {"format": Path(filepath).suffix.lower(), "duration": None, "bitrate": None, "sample_rate": None, "channels": None}
     if HAVE_MUTAGEN:
@@ -520,8 +683,41 @@ class LocalCuraApp:
                 image = Image.open(BytesIO(contents)).convert("RGB")
                 # Compress large images before sending to LLM
                 image = compress_image_if_needed(image)
+                
+                # Extract ComfyUI metadata if enabled
+                metadata = {}
+                if os.getenv("EXTRACT_METADATA", "true").lower() == "true":
+                    import tempfile
+                    with tempfile.NamedTemporaryFile(suffix=Path(filename).suffix, delete=False) as tmp:
+                        tmp.write(contents)
+                        tmp_path = tmp.name
+                    try:
+                        metadata = MetadataExtractor.extract_comfyui_metadata(Path(tmp_path))
+                    finally:
+                        try:
+                            os.unlink(tmp_path)
+                        except:
+                            pass
+                
                 analysis = self.client.analyze_image(image, prompt)
                 result = self._format_result(filename, analysis, media_kind)
+                
+                # Extract color palette
+                if os.getenv("EXTRACT_COLORS", "true").lower() == "true":
+                    cv = ColorExtractor(n_dominant=5)
+                    result["color_palette"] = cv.extract(image)
+                
+                # Apply 3-layer tag verification
+                if "tags" in result:
+                    verifier = TagVerifier(
+                        max_tags=int(os.getenv("MAX_TAGS", "30")),
+                        min_len=int(os.getenv("MIN_TAG_LENGTH", "2")),
+                        max_len=int(os.getenv("MAX_TAG_LENGTH", "25")),
+                    )
+                    result["verified_tags"] = verifier.verify(result["tags"])
+                    result["tags"] = result["verified_tags"]["cleaned"]
+                
+                result["metadata"] = metadata
                 _set_cached(contents, result)
                 return result
             except Exception as e:
@@ -802,6 +998,37 @@ def cache_stats():
 def cache_clear():
     clear_cache()
     return {"status": "cleared"}
+
+
+@app.get("/models")
+def list_models():
+    """List installed Ollama models with vision capability detection."""
+    base = app_instance.cfg.ollama_base_url.rstrip("/api").rstrip("/")
+    try:
+        resp = requests.get(f"{base}/api/tags", timeout=5)
+        resp.raise_for_status()
+        raw = resp.json().get("models", [])
+        models = []
+        for m in raw:
+            name = m.get("name", "")
+            size = m.get("size", 0)
+            size_gb = round(size / (1024 ** 3), 2) if size else 0
+            # Heuristic: vision models usually have 'vl' or vision-related names
+            is_vision = any(k in name.lower() for k in ['vl', 'vision', 'llava', 'bakllava', 'moondream', 'cogvlm'])
+            models.append({
+                "name": name,
+                "size_gb": size_gb,
+                "vision": is_vision,
+                "modified": m.get("modified_at", ""),
+            })
+        models.sort(key=lambda x: x["size_gb"], reverse=True)
+        return {
+            "models": models,
+            "recommended": next((m["name"] for m in models if m["vision"]), None),
+            "current": app_instance.cfg.ollama_model,
+        }
+    except Exception as e:
+        return {"error": str(e), "models": []}
 
 
 @app.post("/process")

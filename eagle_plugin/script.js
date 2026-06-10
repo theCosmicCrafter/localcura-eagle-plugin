@@ -85,7 +85,23 @@ function detectPythonPath(projectRoot) {
     return 'python';
 }
 
-function ensurePaths() {
+let availableModels = [];
+
+async function fetchModels() {
+    try {
+        const res = await apiFetch(`${API_URL}/models`);
+        if (!res.ok) return;
+        const data = await res.json();
+        availableModels = data.models || [];
+        if (data.recommended && !settings.selectedModel) {
+            settings.selectedModel = data.recommended;
+        }
+    } catch (e) {
+        console.warn('Failed to fetch models:', e);
+    }
+}
+
+function ensurePaths() {ensurePaths
     if (!PROJECT_ROOT) {
         PROJECT_ROOT = detectProjectRoot();
     }
@@ -172,10 +188,15 @@ const DEFAULT_SETTINGS = {
     enableSimilarityGrouping: true,
     similarityThreshold: 8,  // Hamming distance for grouping
     enableResume: true,
-    enableProgressiveEnhancement: false,  // Off by default (3-stage tagging)
+    enableProgressiveEnhancement: false,
     autoStartServer: true,
     projectRoot: '',
     pythonPath: '',
+    extractMetadata: true,
+    extractColors: true,
+    maxTags: 30,
+    verifyTags: true,
+    selectedModel: '',
 };
 
 // Load settings from Eagle storage
@@ -704,6 +725,9 @@ async function processSingleItem(item, abortController, attempt = 1) {
 
         await item.save();
 
+        // Show results panel
+        showResultPanel(item, result);
+        
         // Success State
         updateQueueItem(item.id, 'success');
         
@@ -711,7 +735,7 @@ async function processSingleItem(item, abortController, attempt = 1) {
         const responseTime = Date.now() - startTime;
         updateAdaptiveChunking(responseTime);
         
-        return { success: true, responseTime };
+        return { success: true, responseTime, result };
 
     } catch (e) {
         if (e.name === 'AbortError') throw e;
@@ -1046,6 +1070,7 @@ async function processImages() {
                         const result = batchResult.results[j];
                         if (result && !result.error) {
                             resultsMap[item.id] = result;
+                            showResultPanel(item, result);
                         }
                     }
                 }
@@ -1245,6 +1270,40 @@ function toggleSettingsPanel() {
                            onchange="updateSetting('enableCompression', this.checked)">
                     Image Compression
                 </label>
+                <label>
+                    <input type="checkbox" ${settings.extractMetadata ? 'checked' : ''} 
+                           onchange="updateSetting('extractMetadata', this.checked)">
+                    Extract ComfyUI/SD Metadata
+                </label>
+                <label>
+                    <input type="checkbox" ${settings.extractColors ? 'checked' : ''} 
+                           onchange="updateSetting('extractColors', this.checked)">
+                    Extract Color Palette
+                </label>
+                <label>
+                    <input type="checkbox" ${settings.verifyTags ? 'checked' : ''} 
+                           onchange="updateSetting('verifyTags', this.checked)">
+                    3-Layer Tag Verification
+                </label>
+            </div>
+            <div class="setting-group">
+                <h4>Tag Limits</h4>
+                <label>
+                    Max Tags: <span id="maxTagsVal">${settings.maxTags}</span>
+                    <input type="range" min="5" max="50" value="${settings.maxTags}" 
+                           onchange="updateSetting('maxTags', this.value); document.getElementById('maxTagsVal').textContent = this.value;">
+                </label>
+            </div>
+            <div class="setting-group">
+                <h4>AI Model</h4>
+                <label>
+                    <select id="modelSelect" onchange="updateSetting('selectedModel', this.value)" 
+                            style="width:100%;background:var(--bg-app);color:var(--text-main);border:1px solid var(--border-subtle);border-radius:4px;padding:4px;">
+                        <option value="">${settings.selectedModel || 'Auto (qwen3-vl:8b)'}</option>
+                        ${availableModels.map(m => `<option value="${m.name}" ${settings.selectedModel === m.name ? 'selected' : ''}>${m.name} (${m.size_gb}GB) ${m.vision ? '👁' : ''}</option>`).join('')}
+                    </select>
+                </label>
+                <button onclick="fetchModels().then(() => { document.getElementById('modelSelect').innerHTML = '<option value=\'\'>Auto</option>' + availableModels.map(m => '<option value=\'' + m.name + '\'>' + m.name + ' (' + m.size_gb + 'GB) ' + (m.vision ? '👁' : '') + '</option>').join(''); toast('Models refreshed', 'success'); })">Refresh Models</button>
             </div>
             <div class="setting-group">
                 <h4>Backend</h4>
@@ -1332,6 +1391,57 @@ function toggleSettingsPanel() {
     document.body.appendChild(panel);
 }
 
+
+// Results Panel
+function showResultPanel(item, result) {
+    let panel = document.getElementById('resultPanel');
+    if (!panel) {
+        panel = document.createElement('div');
+        panel.id = 'resultPanel';
+        panel.style.cssText = `
+            position: fixed; bottom: 10px; left: 10px; right: 10px;
+            max-height: 200px; overflow-y: auto;
+            background: var(--bg-card); border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-lg); padding: 12px;
+            z-index: 900; font-size: 12px;
+            box-shadow: 0 -4px 20px rgba(0,0,0,0.3);
+        `;
+        document.body.appendChild(panel);
+    }
+    
+    const tags = result.tags || [];
+    const palette = result.color_palette || {};
+    const metadata = result.metadata || {};
+    const aesthetic = result.aesthetic || 0;
+    const stars = '★'.repeat(Math.round(aesthetic / 2)) + '☆'.repeat(5 - Math.round(aesthetic / 2));
+    
+    let colorsHtml = '';
+    if (palette.dominant) {
+        colorsHtml = '<div style="display:flex;gap:4px;margin-top:4px;">' + 
+            palette.dominant.map(c => 
+                `<div style="width:20px;height:20px;border-radius:4px;background:${c.hex};border:1px solid var(--border-subtle);" title="${c.hex}"></div>`
+            ).join('') + 
+            `</div><div style="color:var(--text-muted);margin-top:2px;">${palette.palette_type || ''}</div>`;
+    }
+    
+    let metaHtml = '';
+    if (metadata.ai_generated) {
+        metaHtml = `<div style="color:var(--accent);margin-top:4px;">AI Generated (${metadata.generator || 'unknown'})</div>`;
+        if (metadata.seed) metaHtml += `<div style="color:var(--text-muted);">Seed: ${metadata.seed}</div>`;
+    }
+    
+    panel.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+            <strong>${item.name}</strong>
+            <span style="color:var(--accent);">${stars} ${aesthetic > 0 ? aesthetic.toFixed(1) : ''}</span>
+        </div>
+        <div style="margin-top:4px;color:var(--text-main);">${tags.slice(0, 15).join(', ')}${tags.length > 15 ? '...' : ''}</div>
+        ${colorsHtml}
+        ${metaHtml}
+    `;
+    panel.style.display = 'block';
+}
+
 function updateSetting(key, value) {
     if (typeof value === 'string' && !isNaN(value)) {
         value = parseInt(value);
@@ -1384,6 +1494,9 @@ eagle.onPluginCreate(async (plugin) => {
 
         // Kill any orphaned server process from previous session
         killOrphanPid();
+
+        // Fetch available Ollama models
+        await fetchModels();
         
         // Load settings from storage
         await loadSettings();

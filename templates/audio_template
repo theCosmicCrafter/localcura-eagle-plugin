@@ -1,7 +1,7 @@
 {
   "globalInstructions": "Analyze the provided audio as an archivist and musicologist. Reference genre, instrumentation, mood, structure, and production details. If metadata is absent, infer ONLY from audible evidence.",
   "name": "Audio",
-  "version": 1,
+  "version": 2,
   "rules": [
     {
       "name": "Description",
@@ -16,21 +16,10 @@
       "type": "tags",
       "tagsType": "example",
       "tagsList": [
-        "Ambient",
-        "Classical",
-        "Electronic",
-        "Hip-Hop",
-        "Jazz",
-        "Lo-fi",
-        "Metal",
-        "Pop",
-        "Rock",
-        "Soundtrack",
-        "World",
-        "Field Recording",
-        "Podcast"
+        "Ambient", "Classical", "Electronic", "Hip-Hop", "Jazz",
+        "Lo-fi", "Metal", "Pop", "Rock", "Soundtrack",
+        "World", "Field Recording", "Podcast"
       ],
-      "tagModifier": {"position": "prefix", "text": "Genre", "useSpace": true},
       "instruction": "Identify primary genres (max 3). Key must be 'genre'."
     },
     {
@@ -38,23 +27,15 @@
       "type": "tags",
       "tagsType": "example",
       "tagsList": [
-        "Calm",
-        "Energetic",
-        "Melancholic",
-        "Uplifting",
-        "Dark",
-        "Playful",
-        "Intense",
-        "Meditative"
+        "Calm", "Energetic", "Melancholic", "Uplifting", "Dark",
+        "Playful", "Intense", "Meditative"
       ],
-      "tagModifier": {"position": "prefix", "text": "Mood", "useSpace": true},
       "instruction": "Describe emotional character (2–4 tags). Key 'mood'."
     },
     {
       "name": "Instrumentation",
       "type": "tags",
       "tagsType": "none",
-      "tagModifier": {"position": "prefix", "text": "Instrumentation", "useSpace": true},
       "instruction": "List audible instruments/voices incl. synth types or FX chains. Key 'instrumentation'."
     },
     {
@@ -62,16 +43,9 @@
       "type": "tags",
       "tagsType": "example",
       "tagsList": [
-        "Intro",
-        "Verse",
-        "Chorus",
-        "Bridge",
-        "Drop",
-        "Outro",
-        "Loop",
-        "Improvisation"
+        "Intro", "Verse", "Chorus", "Bridge", "Drop",
+        "Outro", "Loop", "Improvisation"
       ],
-      "tagModifier": {"position": "prefix", "text": "Structure", "useSpace": true},
       "instruction": "Note notable sections or forms (ordered if possible). Key 'structure'."
     },
     {
@@ -79,26 +53,16 @@
       "type": "tags",
       "tagsType": "example",
       "tagsList": [
-        "Lo-fi",
-        "Hi-fi",
-        "Analog",
-        "Digital",
-        "Live",
-        "Studio",
-        "Field Recording",
-        "Stereo Wide",
-        "Mono",
-        "Heavy Compression",
-        "Reverb-heavy"
+        "Lo-fi", "Hi-fi", "Analog", "Digital", "Live",
+        "Studio", "Field Recording", "Stereo Wide", "Mono",
+        "Heavy Compression", "Reverb-heavy"
       ],
-      "tagModifier": {"position": "prefix", "text": "Production", "useSpace": true},
       "instruction": "Summarize mix/recording characteristics. Key 'production'."
     },
     {
       "name": "Similar Artists",
       "type": "tags",
       "tagsType": "example",
-      "tagModifier": {"position": "prefix", "text": "Similar Artist", "useSpace": true},
       "instruction": "Provide 2–4 artists/producers/podcasts with comparable style. Key 'similar artists'."
     }
   ],

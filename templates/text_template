@@ -1,7 +1,7 @@
 {
   "globalInstructions": "Analyze the text as an editor and knowledge architect. Extract factual subjects, style, intent, and key entities. If information is missing, do not fabricate.",
   "name": "Text",
-  "version": 1,
+  "version": 2,
   "rules": [
     {
       "name": "Synopsis",
@@ -13,56 +13,39 @@
       "name": "Primary Topics",
       "type": "tags",
       "tagsType": "none",
-      "instruction": "List the core subject areas or keywords (max 8). Use precise nouns. Key 'topics'.",
-      "tagModifier": {"position": "prefix", "text": "Topic", "useSpace": true}
+      "instruction": "List the core subject areas or keywords (max 8). Use precise nouns. Key 'topics'."
     },
     {
       "name": "Tone",
       "type": "tags",
       "tagsType": "example",
       "tagsList": [
-        "Analytical",
-        "Persuasive",
-        "Satirical",
-        "Formal",
-        "Casual",
-        "Technical",
-        "Emotional",
-        "Narrative"
+        "Analytical", "Persuasive", "Satirical", "Formal",
+        "Casual", "Technical", "Emotional", "Narrative"
       ],
-      "instruction": "Characterize the voice/style (2–3 tags). Key 'tone'.",
-      "tagModifier": {"position": "prefix", "text": "Tone", "useSpace": true}
+      "instruction": "Characterize the voice/style (2–3 tags). Key 'tone'."
     },
     {
       "name": "Audience and Intent",
       "type": "tags",
       "tagsType": "example",
       "tagsList": [
-        "General Audience",
-        "Specialist",
-        "Internal Memo",
-        "Marketing",
-        "Educational",
-        "Research",
-        "Fiction",
-        "Transcript"
+        "General Audience", "Specialist", "Internal Memo", "Marketing",
+        "Educational", "Research", "Fiction", "Transcript"
       ],
-      "instruction": "Specify target reader & document purpose. Key 'intent'.",
-      "tagModifier": {"position": "prefix", "text": "Intent", "useSpace": true}
+      "instruction": "Specify target reader & document purpose. Key 'intent'."
     },
     {
       "name": "Named Entities",
       "type": "tags",
       "tagsType": "none",
-      "instruction": "List people, organizations, locations, or works cited. Include descriptors (e.g., 'Entity: NASA – agency'). Key 'entities'.",
-      "tagModifier": {"position": "prefix", "text": "Entity", "useSpace": true}
+      "instruction": "List people, organizations, locations, or works cited. Include descriptors (e.g., 'NASA – agency'). Key 'entities'."
     },
     {
       "name": "Similar Authors",
       "type": "tags",
       "tagsType": "example",
-      "instruction": "Provide 2–4 writers or publications with comparable tone or subject matter. Key 'similar authors'.",
-      "tagModifier": {"position": "prefix", "text": "Similar Author", "useSpace": true}
+      "instruction": "Provide 2–4 writers or publications with comparable tone or subject matter. Key 'similar authors'."
     }
   ],
   "skipRule": {

@@ -930,13 +930,46 @@ class LocalCuraApp:
                 collected.extend(value)
             elif isinstance(value, str):
                 collected.append(value)
-        return sorted(
-            {
-                str(tag).strip()
-                for tag in collected
-                if isinstance(tag, str) and tag.strip()
-            }
-        )
+
+        # Strip common prefix patterns that the LLM may have added
+        # e.g., "Subject: black top" -> "black top"
+        PREFIX_PATTERNS = [
+            r"^Subject:\s*",
+            r"^Genre:\s*",
+            r"^Lighting:\s*",
+            r"^Color/Tone:\s*",
+            r"^Time/Season:\s*",
+            r"^Similar Artist:\s*",
+            r"^Cinematography:\s*",
+            r"^Production:\s*",
+            r"^Mood:\s*",
+            r"^Instrumentation:\s*",
+            r"^Structure:\s*",
+            r"^Topic:\s*",
+            r"^Tone:\s*",
+            r"^Intent:\s*",
+            r"^Entity:\s*",
+            r"^subjects:\s*",
+            r"^genre:\s*",
+            r"^lighting:\s*",
+            r"^color_and_tone:\s*",
+            r"^time_or_season:\s*",
+        ]
+
+        cleaned = []
+        for tag in collected:
+            if not isinstance(tag, str):
+                continue
+            tag = str(tag).strip()
+            if not tag:
+                continue
+            for pattern in PREFIX_PATTERNS:
+                tag = re.sub(pattern, "", tag, flags=re.IGNORECASE)
+            tag = tag.strip()
+            if tag:
+                cleaned.append(tag)
+
+        return sorted({t for t in cleaned})
 
 
 # -------------------------------------------------------------------------

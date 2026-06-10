@@ -743,6 +743,13 @@ async function processSingleItem(item, abortController, attempt = 1) {
         processedCount++;
         processedCountEl.textContent = processedCount;
         queueProgress.textContent = `${processedCount}/${totalItems}`;
+        
+        // Update Eagle native progress bar
+        try {
+            const progress = totalItems > 0 ? processedCount / totalItems : 0;
+            eagle.window.setProgress(progress);
+        } catch (e) {}
+        
         activityDot.classList.remove('active');
     }
 }
@@ -818,6 +825,12 @@ async function processBatchChunk(items, abortController) {
             processedCount++;
             processedCountEl.textContent = processedCount;
             queueProgress.textContent = `${processedCount}/${totalItems}`;
+            
+            // Update Eagle native progress bar
+            try {
+                const progress = totalItems > 0 ? processedCount / totalItems : 0;
+                eagle.window.setProgress(progress);
+            } catch (e) {}
 
             // Track response time for adaptive chunking (use per-item approximation)
             const responseTime = Date.now() - startTime + 500; // rough estimate
@@ -829,7 +842,17 @@ async function processBatchChunk(items, abortController) {
             }
         }
 
-        return { success: true };
+        // Build results map for propagation
+        const results = [];
+        for (const item of items) {
+            results.push({
+                id: item.id,
+                tags: item.tags,
+                star: item.star,
+                annotation: item.annotation,
+            });
+        }
+        return { success: true, results };
 
     } catch (e) {
         if (e.name === 'AbortError') throw e;
@@ -840,6 +863,113 @@ async function processBatchChunk(items, abortController) {
             await processSingleItem(item, abortController);
         }
         return { success: false, error: e.message };
+    }
+}
+
+// Similarity grouping: detect duplicates before processing
+async function groupSimilarItems(items) {
+    if (!settings.enableSimilarityGrouping) return { representatives: items, skipMap: {} };
+    
+    // Filter to image items only
+    const imageItems = items.filter(item => {
+        const ext = (item.ext || '').toLowerCase();
+        return ['jpg','jpeg','png','webp','bmp','tiff','gif','avif','heic'].includes(ext);
+    });
+    
+    if (imageItems.length < 2) return { representatives: items, skipMap: {} };
+    
+    try {
+        // Send all image paths to similarity endpoint
+        const paths = imageItems.map(item => item.filePath).filter(Boolean);
+        if (paths.length < 2) return { representatives: items, skipMap: {} };
+        
+        const formData = new FormData();
+        const fs = require('fs');
+        for (let i = 0; i < Math.min(paths.length, 50); i++) { // cap at 50 for performance
+            const buf = fs.readFileSync(paths[i]);
+            formData.append('files', new Blob([buf]), imageItems[i].name + '.' + imageItems[i].ext);
+        }
+        
+        const res = await apiFetch(`${API_URL}/similarity/group?threshold=${settings.similarityThreshold}`, {
+            method: 'POST',
+            body: formData
+        });
+        
+        if (!res.ok) return { representatives: items, skipMap: {} };
+        
+        const data = await res.json();
+        const groups = data.groups || [];
+        if (groups.length === 0) return { representatives: items, skipMap: {} };
+        
+        // Build skip map: representative index -> list of duplicate indices (in imageItems)
+        const skipMap = {};
+        const representatives = [];
+        const used = new Set();
+        
+        for (const group of groups) {
+            const indices = group.indices || [];
+            if (indices.length < 2) continue;
+            const repIdx = indices[0];
+            const repItem = imageItems[repIdx];
+            representatives.push(repItem);
+            used.add(repItem.id);
+            skipMap[repItem.id] = indices.slice(1).map(idx => {
+                const dup = imageItems[idx];
+                return dup ? dup.id : null;
+            }).filter(Boolean);
+        }
+        
+        // Add non-grouped items as their own representatives
+        for (const item of imageItems) {
+            if (!used.has(item.id)) {
+                representatives.push(item);
+            }
+        }
+        
+        // Add non-image items back
+        const nonImageItems = items.filter(item => !imageItems.includes(item));
+        representatives.push(...nonImageItems);
+        
+        toast(`Grouped ${groups.length} similarity sets, skipping ${Object.values(skipMap).flat().length} duplicates`, 'info');
+        return { representatives, skipMap };
+        
+    } catch (e) {
+        console.warn('Similarity grouping failed:', e);
+        return { representatives: items, skipMap: {} };
+    }
+}
+
+// Apply tags from representative to its duplicates
+async function propagateTags(repItem, dupIds, resultsMap) {
+    const result = resultsMap[repItem.id];
+    if (!result) return;
+    
+    for (const dupId of dupIds) {
+        try {
+            const dupItem = await eagle.item.get({ id: dupId });
+            if (!dupItem) continue;
+            
+            let rawNewTags = result.tags || [];
+            if (result.analysis) {
+                if (Array.isArray(result.analysis.subjects)) rawNewTags.push(...result.analysis.subjects);
+                if (result.analysis.visual_style) rawNewTags.push(result.analysis.visual_style);
+            }
+            
+            const cleanExisting = cleanTags(dupItem.tags || []);
+            const cleanNew = cleanTags(rawNewTags);
+            dupItem.tags = [...new Set([...cleanExisting, ...cleanNew])];
+            
+            if (result.aesthetic !== undefined) {
+                dupItem.star = Math.max(1, Math.min(5, Math.round(result.aesthetic / 2)));
+            }
+            if (result.analysis && result.analysis.summary) {
+                dupItem.annotation = result.analysis.summary;
+            }
+            await dupItem.save();
+            updateQueueItem(dupId, 'success');
+        } catch (e) {
+            console.warn(`Failed to propagate tags to ${dupId}:`, e);
+        }
     }
 }
 
@@ -878,6 +1008,7 @@ async function processImages() {
 
     const chunkSize = CHUNK_SIZE();
     const totalChunks = Math.ceil(items.length / chunkSize);
+    const resultsMap = {}; // repId -> result, for propagation
     toast(`Starting batch analysis for ${items.length} items in ${totalChunks} chunks (size: ${chunkSize})...`, "info");
 
     // Process in chunks
@@ -907,6 +1038,16 @@ async function processImages() {
                 if (settings.enableResume && batchResult.success) {
                     chunk.forEach(item => processedIds.push(item.id));
                     saveBatchState(items, processedIds);
+                }
+                // Store results for duplicate propagation (map by item id)
+                if (batchResult.success && batchResult.results) {
+                    for (let j = 0; j < chunk.length; j++) {
+                        const item = chunk[j];
+                        const result = batchResult.results[j];
+                        if (result && !result.error) {
+                            resultsMap[item.id] = result;
+                        }
+                    }
                 }
             } catch (e) {
                 if (e.name === 'AbortError') break;
@@ -941,7 +1082,7 @@ async function processImages() {
         }
     }
 
-    finishProcessing();
+    finishProcessing(skipMap, resultsMap);
 }
 
 function finishProcessing() {
@@ -1204,6 +1345,16 @@ function resetSettings() {
     toggleSettingsPanel();
     toast('Settings reset to defaults', 'success');
 }
+
+// Keyboard shortcut: Ctrl+Shift+T to tag selected
+window.addEventListener('keydown', (e) => {
+    if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 't') {
+        e.preventDefault();
+        if (!isProcessing) {
+            processImages();
+        }
+    }
+});
 
 // Events
 startBtn.addEventListener('click', processImages);

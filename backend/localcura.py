@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import logging
 import os
@@ -73,6 +74,30 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger("localcura")
+
+# Simple in-memory LRU cache for analysis results
+_analysis_cache: Dict[str, Dict[str, Any]] = {}
+_CACHE_MAX_SIZE = 500
+
+def _cache_key(contents: bytes) -> str:
+    return hashlib.sha256(contents).hexdigest()
+
+def _get_cached(contents: bytes) -> Optional[Dict[str, Any]]:
+    key = _cache_key(contents)
+    return _analysis_cache.get(key)
+
+def _set_cached(contents: bytes, result: Dict[str, Any]) -> None:
+    key = _cache_key(contents)
+    if len(_analysis_cache) >= _CACHE_MAX_SIZE:
+        # Evict oldest entry (simple: clear half)
+        keys = list(_analysis_cache.keys())
+        for k in keys[:len(keys)//2]:
+            del _analysis_cache[k]
+    _analysis_cache[key] = result
+
+def clear_cache() -> None:
+    _analysis_cache.clear()
+    logger.info("Analysis cache cleared.")
 
 
 # Template cache to avoid disk reads on every request
@@ -468,7 +493,14 @@ class LocalCuraApp:
         self, filename: str, contents: bytes, content_type: Optional[str]
     ) -> Dict[str, Any]:
         media_kind = determine_media_kind(filename or "", content_type)
-        
+
+        # Check cache (skip for text since contents may vary by read mode)
+        if media_kind != "text":
+            cached = _get_cached(contents)
+            if cached:
+                logger.info("Cache hit for %s", filename)
+                return {**cached, "cached": True}
+
         # Validate file size
         if not validate_file_size(contents):
             size_mb = len(contents) / (1024 * 1024)
@@ -489,7 +521,9 @@ class LocalCuraApp:
                 # Compress large images before sending to LLM
                 image = compress_image_if_needed(image)
                 analysis = self.client.analyze_image(image, prompt)
-                return self._format_result(filename, analysis, media_kind)
+                result = self._format_result(filename, analysis, media_kind)
+                _set_cached(contents, result)
+                return result
             except Exception as e:
                 logger.error("Error processing image %s: %s", filename, e)
                 return {
@@ -502,7 +536,9 @@ class LocalCuraApp:
         if media_kind == "text":
             text_payload = truncate_text_payload(contents)
             analysis = self.client.analyze_text(text_payload, prompt)
-            return self._format_result(filename, analysis, media_kind)
+            result = self._format_result(filename, analysis, media_kind)
+            _set_cached(contents, result)
+            return result
 
         if media_kind == "video":
             if not HAVE_CV2:
@@ -533,7 +569,9 @@ class LocalCuraApp:
                 
                 # Merge analyses from all frames
                 merged_analysis = self._merge_video_analyses(all_analyses)
-                return self._format_result(filename, merged_analysis, media_kind)
+                result = self._format_result(filename, merged_analysis, media_kind)
+                _set_cached(contents, result)
+                return result
                 
             except Exception as e:
                 logger.error("Error processing video %s: %s", filename, e)
@@ -552,6 +590,7 @@ class LocalCuraApp:
                 analysis = self.client.analyze_text(text_payload, prompt)
                 result = self._format_result(filename, analysis, media_kind)
                 result["audio_metadata"] = audio_info["metadata"]
+                _set_cached(contents, result)
                 return result
             except Exception as e:
                 logger.error("Error processing audio %s: %s", filename, e)
@@ -562,12 +601,14 @@ class LocalCuraApp:
                     "retryable": False,
                 }
 
-        return {
+        result = {
             "file": filename,
             "media_kind": media_kind,
             "error": "Unsupported media type",
             "retryable": False,
         }
+        _set_cached(contents, result)
+        return result
 
     def _build_prompt(self, media_kind: str) -> str:
         if media_kind == "text":
@@ -747,6 +788,20 @@ async def api_key_check(request, call_next):
 @app.get("/health")
 def health():
     return {"status": "ok", "model": app_instance.cfg.ollama_model}
+
+
+@app.get("/cache/stats")
+def cache_stats():
+    return {
+        "cached_entries": len(_analysis_cache),
+        "max_size": _CACHE_MAX_SIZE,
+    }
+
+
+@app.post("/cache/clear")
+def cache_clear():
+    clear_cache()
+    return {"status": "cleared"}
 
 
 @app.post("/process")

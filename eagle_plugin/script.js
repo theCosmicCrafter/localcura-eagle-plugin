@@ -658,6 +658,7 @@ function delay(ms) {
 
 // Process a single item with retry logic and response time tracking
 async function processSingleItem(item, abortController, attempt = 1) {
+    console.log(`[Single] Processing item: ${item.name} (attempt ${attempt})`);
     const startTime = Date.now();
     let result = null;
     
@@ -731,6 +732,7 @@ async function processSingleItem(item, abortController, attempt = 1) {
         const responseTime = Date.now() - startTime;
         updateAdaptiveChunking(responseTime);
         
+        console.log(`[Single] Success for ${item.name}, tags:`, result.tags?.slice(0, 10));
         return { success: true, responseTime, result };
 
     } catch (e) {
@@ -757,6 +759,7 @@ async function processSingleItem(item, abortController, attempt = 1) {
             return processSingleItem(item, abortController, attempt + 1);
         }
 
+        console.error(`[Single] Error for ${item.name}:`, e.message);
         updateQueueItem(item.id, 'error', e.message);
         return { success: false, error: e.message };
     } finally {
@@ -792,15 +795,17 @@ async function processBatchChunk(items, abortController) {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
         const data = await res.json();
-        const results = data.results || [];
+        const backendResults = data.results || [];
+        console.log(`[Batch] Backend returned ${backendResults.length} results for ${items.length} items`);
 
         // Apply results back to Eagle items
         for (let i = 0; i < items.length; i++) {
             const item = items[i];
-            const result = results[i] || {};
+            const result = backendResults[i] || {};
             const startTime = Date.now();
 
             if (result.error) {
+                console.warn(`[Batch] Item ${i} (${item.name}) error:`, result.error);
                 updateQueueItem(item.id, 'error', result.error);
                 processedCount++;
                 processedCountEl.textContent = processedCount;
@@ -810,6 +815,7 @@ async function processBatchChunk(items, abortController) {
 
             try {
                 let rawNewTags = result.tags || [];
+                console.log(`[Batch] Item ${i} (${item.name}) tags:`, rawNewTags.slice(0, 10));
 
                 const cleanExisting = cleanTags(item.tags || []);
                 const cleanNew = cleanTags(rawNewTags);
@@ -831,6 +837,7 @@ async function processBatchChunk(items, abortController) {
                 await item.save();
                 updateQueueItem(item.id, 'success');
             } catch (saveErr) {
+                console.error(`[Batch] Item ${i} save error:`, saveErr);
                 updateQueueItem(item.id, 'error', saveErr.message);
             }
 
@@ -845,7 +852,7 @@ async function processBatchChunk(items, abortController) {
             } catch (e) {}
 
             // Track response time for adaptive chunking (use per-item approximation)
-            const responseTime = Date.now() - startTime + 500; // rough estimate
+            const responseTime = Date.now() - startTime + 500;
             updateAdaptiveChunking(responseTime);
 
             // Small delay between items to keep UI responsive
@@ -854,17 +861,17 @@ async function processBatchChunk(items, abortController) {
             }
         }
 
-        // Build results map for propagation
-        const results = [];
+        // Build return results for propagation
+        const propagationResults = [];
         for (const item of items) {
-            results.push({
+            propagationResults.push({
                 id: item.id,
                 tags: item.tags,
                 star: item.star,
                 annotation: item.annotation,
             });
         }
-        return { success: true, results };
+        return { success: true, results: propagationResults };
 
     } catch (e) {
         if (e.name === 'AbortError') throw e;
@@ -985,7 +992,8 @@ async function propagateTags(repItem, dupIds, resultsMap) {
 async function processImages() {
     if (isProcessing) return;
 
-    const items = await eagle.item.getSelected();
+    let items = await eagle.item.getSelected();
+    console.log('[Process] Selected items:', items.length, items.map(i => i.name));
     if (items.length === 0) return;
 
     isProcessing = true;
@@ -1035,10 +1043,12 @@ async function processImages() {
         const itemDelay = ITEM_DELAY_MS();
         const chunkDelay = CHUNK_DELAY_MS();
 
+        console.log(`[Chunk] Processing chunk ${chunkIndex + 1}/${totalChunks}, items:`, chunk.map(i => i.name));
         log(`Processing chunk ${chunkIndex + 1}/${totalChunks} (${chunk.length} items, chunk size: ${currentChunkSize})...`, 'info', { toast: false });
 
         // Use server-side batch processing for file paths (much faster)
         const allHavePaths = chunk.every(item => !!item.filePath);
+        console.log(`[Chunk] allHavePaths:`, allHavePaths, 'backendOnline:', backendOnline);
         if (allHavePaths && backendOnline) {
             try {
                 const batchResult = await processBatchChunk(chunk, abortController);
@@ -1094,7 +1104,21 @@ async function processImages() {
     finishProcessing(skipMap, resultsMap);
 }
 
-function finishProcessing() {
+function finishProcessing(skipMap, resultsMap) {
+    console.log('[Finish] Batch complete. skipMap:', skipMap ? Object.keys(skipMap).length : 0, 'resultsMap:', resultsMap ? Object.keys(resultsMap).length : 0);
+    
+    // Propagate tags from representatives to duplicates
+    if (skipMap && Object.keys(skipMap).length > 0 && resultsMap) {
+        for (const [repId, dupIds] of Object.entries(skipMap)) {
+            try {
+                const repItem = items.find(i => i.id === repId);
+                if (repItem) propagateTags(repItem, dupIds, resultsMap);
+            } catch (e) {
+                console.warn('Propagation failed:', e);
+            }
+        }
+    }
+    
     isProcessing = false;
     abortController = null;
     lastActivity.textContent = "Batch Complete";
@@ -1103,7 +1127,6 @@ function finishProcessing() {
     // Clean up memory (object URLs)
     cleanupQueueMemory();
 
-    // Refresh Eagle view to show new tags
     // Tags saved via item.save() — no full reload needed
 }
 

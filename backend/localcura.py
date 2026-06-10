@@ -725,6 +725,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Simple API key middleware
+API_KEY = os.getenv("COSMICTAGGER_API_KEY", "")
+
+@app.middleware("http")
+async def api_key_check(request, call_next):
+    # Skip health check and OPTIONS
+    if request.url.path == "/health" or request.method == "OPTIONS":
+        return await call_next(request)
+    if API_KEY:
+        header_key = request.headers.get("X-API-Key", "")
+        if header_key != API_KEY:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(
+                status_code=403,
+                content={"error": "Invalid or missing API key", "success": False}
+            )
+    return await call_next(request)
+
 
 @app.get("/health")
 def health():
@@ -753,6 +771,40 @@ async def process_batch(files: List[UploadFile] = File(...)):
             results.append({"file": file.filename, "error": str(e)})
     return {
         "total": len(files),
+        "processed": len(results),
+        "errors": errors,
+        "results": results,
+    }
+
+
+@app.post("/process/batch/paths")
+async def process_batch_paths(payload: Dict[str, Any]):
+    """Process files by their local file paths."""
+    paths = payload.get("paths", [])
+    if not paths:
+        return {"total": 0, "results": []}
+
+    results = []
+    errors = []
+    for p in paths:
+        try:
+            file_path = Path(p)
+            if not file_path.exists():
+                errors.append({"path": p, "error": "File not found"})
+                results.append({"path": p, "error": "File not found"})
+                continue
+            result = app_instance.process_file(file_path)
+            result["path"] = p
+            results.append(result)
+            if "error" in result:
+                errors.append({"path": p, "error": result["error"]})
+        except Exception as e:
+            logger.error("Batch path processing failed for %s: %s", p, e)
+            errors.append({"path": p, "error": str(e)})
+            results.append({"path": p, "error": str(e)})
+
+    return {
+        "total": len(paths),
         "processed": len(results),
         "errors": errors,
         "results": results,

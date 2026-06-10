@@ -9,6 +9,34 @@ const API_URL = "http://127.0.0.1:8005";
 const child_process = require('child_process');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
+
+// Generate or retrieve API auth token
+let API_TOKEN = '';
+const TOKEN_KEY = 'cosmictagger_api_token';
+
+function getApiToken() {
+    try {
+        const stored = eagle.storage.getItemSync ? eagle.storage.getItemSync(TOKEN_KEY) : null;
+        if (stored) return stored;
+    } catch (e) {}
+    // Generate new token
+    const token = crypto.randomBytes(16).toString('hex');
+    try {
+        eagle.storage.setItemSync(TOKEN_KEY, token);
+    } catch (e) {
+        console.warn('Failed to store API token:', e);
+    }
+    return token;
+}
+
+function apiFetch(url, options = {}) {
+    options.headers = options.headers || {};
+    if (API_TOKEN) {
+        options.headers['X-API-Key'] = API_TOKEN;
+    }
+    return fetch(url, options);
+}
 
 // Dynamic path detection
 let PROJECT_ROOT = "";
@@ -82,6 +110,48 @@ let processedCount = 0;
 let totalItems = 0;
 let serverProcess = null;
 let healthFailureCount = 0; // consecutive failed /health checks
+const PID_KEY = 'cosmictagger_server_pid';
+
+function storePid(pid) {
+    try {
+        if (eagle.storage.setItemSync) {
+            eagle.storage.setItemSync(PID_KEY, String(pid));
+        }
+    } catch (e) {}
+}
+
+function getStoredPid() {
+    try {
+        if (eagle.storage.getItemSync) {
+            return parseInt(eagle.storage.getItemSync(PID_KEY), 10);
+        }
+    } catch (e) {}
+    return null;
+}
+
+function clearStoredPid() {
+    try {
+        if (eagle.storage.removeItemSync) {
+            eagle.storage.removeItemSync(PID_KEY);
+        }
+    } catch (e) {}
+}
+
+function killOrphanPid() {
+    const pid = getStoredPid();
+    if (!pid || pid === serverProcess?.pid) return;
+    try {
+        if (process.platform === 'win32') {
+            child_process.execSync(`taskkill /F /PID ${pid} /T`, { stdio: 'ignore' });
+        } else {
+            process.kill(pid, 'SIGKILL');
+        }
+        console.log(`Killed orphan server process ${pid}`);
+    } catch (e) {
+        // Process already dead
+    }
+    clearStoredPid();
+}
 
 // Memory management: track object URLs for cleanup
 const objectURLs = new Set();
@@ -337,13 +407,21 @@ async function startServer() {
             env['EAGLE_LIBRARY_PATH'] = libPath;
         }
 
+        const env = { ...process.env, EAGLE_LIBRARY_PATH: libPath };
+        if (API_TOKEN) {
+            env.COSMICTAGGER_API_KEY = API_TOKEN;
+        }
         serverProcess = child_process.spawn(VENV_PYTHON, args, {
             cwd: PROJECT_ROOT,
-            env: { ...process.env, EAGLE_LIBRARY_PATH: libPath },
+            env: env,
             detached: false
         });
 
         serverProcess.stdout.on('data', (data) => { });
+
+        if (serverProcess.pid) {
+            storePid(serverProcess.pid);
+        }
 
         serverProcess.stderr.on('data', (data) => {
             const msg = data.toString();
@@ -376,9 +454,18 @@ async function startServer() {
 function stopServer() {
     if (serverProcess) {
         toast("Stopping server...", "info");
-        serverProcess.kill();
+        try {
+            if (process.platform === 'win32') {
+                child_process.execSync(`taskkill /F /PID ${serverProcess.pid} /T`, { stdio: 'ignore' });
+            } else {
+                serverProcess.kill('SIGKILL');
+            }
+        } catch (e) {
+            serverProcess.kill();
+        }
         serverProcess = null;
     }
+    clearStoredPid();
     serverState = 'stopped';
     serverToggle.textContent = "Start Server";
     serverToggle.classList.remove("running");
@@ -449,7 +536,7 @@ async function checkBackend() {
     try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 5000);
-        const res = await fetch(`${API_URL}/health`, { signal: controller.signal });
+        const res = await apiFetch(`${API_URL}/health`, { signal: controller.signal });
         clearTimeout(timeoutId);
 
         if (res.ok) {
@@ -567,7 +654,7 @@ async function processSingleItem(item, abortController, attempt = 1) {
         const formData = new FormData();
         formData.append('file', blob, item.name + "." + item.ext);
 
-        const res = await fetch(`${API_URL}/process`, {
+        const res = await apiFetch(`${API_URL}/process`, {
             method: 'POST',
             body: formData,
             signal: abortController.signal
@@ -660,6 +747,102 @@ async function processSingleItem(item, abortController, attempt = 1) {
     }
 }
 
+// Send a batch of items to the backend via file paths (server-side batch)
+async function processBatchChunk(items, abortController) {
+    const paths = items.map(item => item.filePath).filter(Boolean);
+    if (paths.length === 0) {
+        return { success: false, error: "No file paths available" };
+    }
+
+    try {
+        const res = await apiFetch(`${API_URL}/process/batch/paths`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ paths }),
+            signal: abortController.signal
+        });
+
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+        const data = await res.json();
+        const results = data.results || [];
+
+        // Apply results back to Eagle items
+        for (let i = 0; i < items.length; i++) {
+            const item = items[i];
+            const result = results[i] || {};
+            const startTime = Date.now();
+
+            if (result.error) {
+                updateQueueItem(item.id, 'error', result.error);
+                processedCount++;
+                processedCountEl.textContent = processedCount;
+                queueProgress.textContent = `${processedCount}/${totalItems}`;
+                continue;
+            }
+
+            try {
+                let rawNewTags = result.tags || [];
+                if (result.analysis) {
+                    if (Array.isArray(result.analysis.subjects)) {
+                        rawNewTags.push(...result.analysis.subjects);
+                    }
+                    if (result.analysis.visual_style) {
+                        rawNewTags.push(result.analysis.visual_style);
+                    }
+                }
+
+                const cleanExisting = cleanTags(item.tags || []);
+                const cleanNew = cleanTags(rawNewTags);
+                const finalTags = [...new Set([...cleanExisting, ...cleanNew])];
+
+                // Rating: map backend aesthetic (0-10) to Eagle stars (1-5)
+                let rating = typeof item.star === 'number' ? item.star : 0;
+                if (result.media_kind !== 'audio' && typeof result.aesthetic === 'number') {
+                    const score = result.aesthetic;
+                    rating = Math.max(1, Math.min(5, Math.round(score / 2)));
+                }
+                rating = Math.max(1, Math.min(5, Math.floor(rating)));
+
+                item.tags = finalTags;
+                item.star = rating;
+                if (result.analysis && result.analysis.summary) {
+                    item.annotation = result.analysis.summary;
+                }
+                await item.save();
+                updateQueueItem(item.id, 'success');
+            } catch (saveErr) {
+                updateQueueItem(item.id, 'error', saveErr.message);
+            }
+
+            processedCount++;
+            processedCountEl.textContent = processedCount;
+            queueProgress.textContent = `${processedCount}/${totalItems}`;
+
+            // Track response time for adaptive chunking (use per-item approximation)
+            const responseTime = Date.now() - startTime + 500; // rough estimate
+            updateAdaptiveChunking(responseTime);
+
+            // Small delay between items to keep UI responsive
+            if (i < items.length - 1) {
+                await delay(ITEM_DELAY_MS());
+            }
+        }
+
+        return { success: true };
+
+    } catch (e) {
+        if (e.name === 'AbortError') throw e;
+        // Fallback to individual processing
+        log(`Batch path processing failed: ${e.message}. Falling back to individual uploads.`, 'warn', { toast: false });
+        for (const item of items) {
+            if (abortController.signal.aborted) break;
+            await processSingleItem(item, abortController);
+        }
+        return { success: false, error: e.message };
+    }
+}
+
 // Process Logic with Chunking
 async function processImages() {
     if (isProcessing) return;
@@ -715,23 +898,39 @@ async function processImages() {
 
         log(`Processing chunk ${chunkIndex + 1}/${totalChunks} (${chunk.length} items, chunk size: ${currentChunkSize})...`, 'info', { toast: false });
 
-        // Process items in current chunk with small delays between them
-        for (let i = 0; i < chunk.length; i++) {
-            if (abortController.signal.aborted) {
-                break;
+        // Use server-side batch processing for file paths (much faster)
+        const allHavePaths = chunk.every(item => !!item.filePath);
+        if (allHavePaths && backendOnline) {
+            try {
+                const batchResult = await processBatchChunk(chunk, abortController);
+                // Save progress for resume
+                if (settings.enableResume && batchResult.success) {
+                    chunk.forEach(item => processedIds.push(item.id));
+                    saveBatchState(items, processedIds);
+                }
+            } catch (e) {
+                if (e.name === 'AbortError') break;
+                log(`Batch chunk failed: ${e.message}`, 'error', { toast: true });
             }
+        } else {
+            // Fallback: individual file upload (original behavior)
+            for (let i = 0; i < chunk.length; i++) {
+                if (abortController.signal.aborted) {
+                    break;
+                }
 
-            const result = await processSingleItem(chunk[i], abortController);
-            
-            // Save progress for resume
-            if (settings.enableResume && result.success) {
-                processedIds.push(chunk[i].id);
-                saveBatchState(items, processedIds);
-            }
+                const result = await processSingleItem(chunk[i], abortController);
+                
+                // Save progress for resume
+                if (settings.enableResume && result.success) {
+                    processedIds.push(chunk[i].id);
+                    saveBatchState(items, processedIds);
+                }
 
-            // Small delay between items within a chunk (except the last one)
-            if (i < chunk.length - 1) {
-                await delay(itemDelay);
+                // Small delay between items within a chunk (except the last one)
+                if (i < chunk.length - 1) {
+                    await delay(itemDelay);
+                }
             }
         }
 
@@ -755,7 +954,7 @@ function finishProcessing() {
     cleanupQueueMemory();
 
     // Refresh Eagle view to show new tags
-    eagle.window.reload();
+    // Tags saved via item.save() — no full reload needed
 }
 
 // Persistence functions for resume capability
@@ -1028,6 +1227,12 @@ function stopProcessing() {
 eagle.onPluginCreate(async (plugin) => {
     try {
         log("CosmicTagger Plugin Ready.");
+
+        // Initialize auth token
+        API_TOKEN = getApiToken();
+
+        // Kill any orphaned server process from previous session
+        killOrphanPid();
         
         // Load settings from storage
         await loadSettings();

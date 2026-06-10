@@ -1,0 +1,25 @@
+{
+  "globalInstructions": "The current name of this item is: <NAME>",
+  "name": "Rename Item",
+  "rules": [
+    {
+      "dependsOnRuleIds": [],
+      "instruction": "Keeping important information from the original name, rename this item to be more descriptive.\n\n- If the current name seems descriptive enough, do not change anything, and output the original name.\n- Names should be kept and capitalized correctly. Prioritize names in the original file name. Avoid using names from the image.\n- Usernames should be kept. If the username includes @, keep the @.\n- Aim for one sentence length.\n- Parts that can be removed could include random alphanumeric strings or extra spaces.\n- If you need a separator, use –",
+      "name": "Name",
+      "type": "name"
+    },
+    {
+      "dependsOnRuleIds": [],
+      "includeNameAsTitle": true,
+      "instruction": "Output the original, completely unchanged name.",
+      "name": "Original Name",
+      "replaceExisting": false,
+      "type": "description"
+    }
+  ],
+  "version": 5,
+  "skipRule": {
+    "tag": "Processed with AI Autotagger: Rename Item",
+    "shouldAddOnSkip": true
+  }
+}

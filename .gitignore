@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+venv/
+env/
+.venv/
+
+# Secrets
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs/
+*.log
+debug_log.txt
+
+# IDE
+.vscode/
+.idea/
+.history/
+
+# Cache
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node (if eagle plugin uses npm later)
+node_modules/

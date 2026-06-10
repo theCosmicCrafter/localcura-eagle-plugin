@@ -1,0 +1,72 @@
+{
+  "globalInstructions": "Analyze the text as an editor and knowledge architect. Extract factual subjects, style, intent, and key entities. If information is missing, do not fabricate.",
+  "name": "Text",
+  "version": 1,
+  "rules": [
+    {
+      "name": "Synopsis",
+      "type": "description",
+      "replaceExisting": true,
+      "instruction": "Provide a concise 2–3 sentence summary covering thesis, scope, and tone. JSON key must be 'description'."
+    },
+    {
+      "name": "Primary Topics",
+      "type": "tags",
+      "tagsType": "none",
+      "instruction": "List the core subject areas or keywords (max 8). Use precise nouns. Key 'topics'.",
+      "tagModifier": {"position": "prefix", "text": "Topic", "useSpace": true}
+    },
+    {
+      "name": "Tone",
+      "type": "tags",
+      "tagsType": "example",
+      "tagsList": [
+        "Analytical",
+        "Persuasive",
+        "Satirical",
+        "Formal",
+        "Casual",
+        "Technical",
+        "Emotional",
+        "Narrative"
+      ],
+      "instruction": "Characterize the voice/style (2–3 tags). Key 'tone'.",
+      "tagModifier": {"position": "prefix", "text": "Tone", "useSpace": true}
+    },
+    {
+      "name": "Audience and Intent",
+      "type": "tags",
+      "tagsType": "example",
+      "tagsList": [
+        "General Audience",
+        "Specialist",
+        "Internal Memo",
+        "Marketing",
+        "Educational",
+        "Research",
+        "Fiction",
+        "Transcript"
+      ],
+      "instruction": "Specify target reader & document purpose. Key 'intent'.",
+      "tagModifier": {"position": "prefix", "text": "Intent", "useSpace": true}
+    },
+    {
+      "name": "Named Entities",
+      "type": "tags",
+      "tagsType": "none",
+      "instruction": "List people, organizations, locations, or works cited. Include descriptors (e.g., 'Entity: NASA – agency'). Key 'entities'.",
+      "tagModifier": {"position": "prefix", "text": "Entity", "useSpace": true}
+    },
+    {
+      "name": "Similar Authors",
+      "type": "tags",
+      "tagsType": "example",
+      "instruction": "Provide 2–4 writers or publications with comparable tone or subject matter. Key 'similar authors'.",
+      "tagModifier": {"position": "prefix", "text": "Similar Author", "useSpace": true}
+    }
+  ],
+  "skipRule": {
+    "tag": "Processed with AI Autotagger: Text",
+    "shouldAddOnSkip": false
+  }
+}

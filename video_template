@@ -1,0 +1,114 @@
+{
+  "globalInstructions": "Analyze the video frames as a professional curator. Consider the narrative flow, cinematography, and overall production quality. Focus on identifying key moments, visual style, and production techniques across the extracted frames.",
+  "name": "Video Analysis",
+  "version": 1,
+  "rules": [
+    {
+      "dependsOnRuleIds": [],
+      "includeNameAsTitle": false,
+      "instruction": "Describe the video content in 2-3 sentences covering subject matter, visual narrative, and production quality. Return JSON: {\"description\": \"...\"}",
+      "name": "Description",
+      "replaceExisting": true,
+      "type": "description"
+    },
+    {
+      "dependsOnRuleIds": [],
+      "instruction": "Identify the video genre/type. Return JSON with key 'genre'.",
+      "name": "Genre",
+      "tagsList": [
+        "Documentary",
+        "Cinematic",
+        "Vlog",
+        "Tutorial",
+        "Music Video",
+        "Commercial",
+        "Short Film",
+        "Animation",
+        "Nature Documentary",
+        "Sports",
+        "Event Coverage",
+        "Interview",
+        "Demo Reel",
+        "Stock Footage"
+      ],
+      "tagsType": "example",
+      "type": "tags",
+      "tagModifier": {
+        "position": "prefix",
+        "text": "Genre",
+        "useSpace": true
+      }
+    },
+    {
+      "dependsOnRuleIds": [],
+      "instruction": "Describe the cinematography style (camera movement, framing, color grading). Key 'cinematography'.",
+      "name": "Cinematography",
+      "tagsList": [
+        "Handheld",
+        "Gimbal/Stabilized",
+        "Static/Tripod",
+        "Drone/Aerial",
+        "Slow Motion",
+        "Time Lapse",
+        "Close-up Heavy",
+        "Wide Shots",
+        "Golden Hour",
+        "Artificial Lighting",
+        "Natural Lighting",
+        "High Contrast",
+        "Muted Tones",
+        "Vibrant Colors",
+        "Black & White"
+      ],
+      "tagsType": "example",
+      "type": "tags",
+      "tagModifier": {
+        "position": "prefix",
+        "text": "Cinematography",
+        "useSpace": true
+      }
+    },
+    {
+      "dependsOnRuleIds": [],
+      "instruction": "Identify subjects, objects, and key visual elements present throughout the video. Minimum 8 tags when detail permits. Key 'subjects'.",
+      "name": "Subjects",
+      "tagsList": [],
+      "tagsType": "none",
+      "type": "tags",
+      "tagModifier": {
+        "position": "prefix",
+        "text": "Subject",
+        "useSpace": true
+      }
+    },
+    {
+      "dependsOnRuleIds": [],
+      "instruction": "Describe the production quality and technical execution. Key 'production_quality'.",
+      "name": "Production Quality",
+      "tagsList": [
+        "Professional",
+        "Amateur",
+        "High Production Value",
+        "Indie/Low Budget",
+        "Well Edited",
+        "Raw Footage",
+        "Sound Design",
+        "Music Score",
+        "Voice Over",
+        "Interviews",
+        "B-roll Heavy"
+      ],
+      "tagsType": "example",
+      "type": "tags",
+      "tagModifier": {
+        "position": "prefix",
+        "text": "Production",
+        "useSpace": true
+      }
+    }
+  ],
+  "skipRule": {
+    "tag": "Processed with AI Autotagger: Video",
+    "shouldAddOnSkip": false
+  }
+}

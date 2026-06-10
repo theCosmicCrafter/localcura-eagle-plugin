@@ -1,0 +1,24 @@
+{
+    "id": "com.cosmictagger.plugin",
+    "version": "1.0.0",
+    "name": "CosmicTagger AI",
+    "logo": "logo.png",
+    "keywords": [
+        "ai",
+        "tagging",
+        "aesthetic",
+        "vlm"
+    ],
+    "devTools": false,
+    "main": {
+        "url": "index.html",
+        "width": 400,
+        "height": 600,
+        "minWidth": 300,
+        "minHeight": 400,
+        "frame": false,
+        "backgroundColor": "#1a1a1a",
+        "resizable": true
+    },
+    "platform": "win"
+}

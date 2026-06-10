@@ -1,0 +1,33 @@
+# Core Web Framework
+fastapi==0.104.1
+uvicorn==0.23.2
+python-multipart==0.0.6
+requests==2.31.0
+
+# Configuration
+python-dotenv==1.0.0
+
+# Image Processing
+pillow==10.3.0
+pillow-avif-plugin==1.4.3
+pillow-heif==0.16.0
+
+# Video Processing (for video frame extraction)
+opencv-python-headless==4.8.0.76
+
+# AI/ML Models
+transformers==4.45.0
+accelerate==0.24.1
+qwen-vl-utils==0.0.8
+open-clip-torch==2.26.1
+
+# Optional: AWQ/quantization support
+# bitsandbytes==0.43.1
+
+# Document Processing
+pypdfium2==4.24.0
+python-docx==1.1.0
+
+# OpenAI API (for potential cloud fallback)
+openai>=1.0.0
+

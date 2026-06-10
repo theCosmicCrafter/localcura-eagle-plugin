@@ -1,0 +1,149 @@
+{
+  "globalInstructions": "Analyze the visual content as a professional curator. PRIORITIZE FACTUAL ACCURACY. Verify every visible attribute (colors, materials, context) before tagging. If uncertain, omit it. Avoid generic tags; be precise and descriptive.",
+  "name": "Photography",
+  "version": 6,
+  "rules": [
+    {
+      "dependsOnRuleIds": [],
+      "includeNameAsTitle": false,
+      "instruction": "Describe the image in 2–3 sentences covering subject, context, and notable aesthetics. Return JSON: {\"description\": \"...\"}",
+      "name": "Description",
+      "replaceExisting": true,
+      "type": "description"
+    },
+    {
+      "dependsOnRuleIds": [],
+      "instruction": "Identify the dominant genres (max 3). Use the tag modifier to prefix with 'Genre'. Return JSON with lowercase key 'genre'.",
+      "name": "Genre",
+      "tagsList": [
+        "Portrait",
+        "Landscape",
+        "Street",
+        "Architecture",
+        "Nature",
+        "Wildlife",
+        "Macro",
+        "Abstract",
+        "Documentary",
+        "Fashion",
+        "Sports",
+        "Food",
+        "Product",
+        "Night",
+        "Aerial",
+        "Underwater",
+        "Astrophotography"
+      ],
+      "tagsType": "example",
+      "type": "tags",
+      "tagModifier": {
+        "position": "prefix",
+        "text": "Genre",
+        "useSpace": true
+      }
+    },
+    {
+      "dependsOnRuleIds": [],
+      "instruction": "Summarize light quality/direction (e.g., soft backlight, dramatic studio key). JSON key must be 'lighting'.",
+      "name": "Lighting",
+      "tagsList": [
+        "Natural",
+        "Artificial",
+        "Studio",
+        "High Key",
+        "Low Key",
+        "Backlit",
+        "Side-lit",
+        "Front-lit",
+        "Soft",
+        "Hard",
+        "Dramatic",
+        "Diffused"
+      ],
+      "tagsType": "example",
+      "type": "tags",
+      "tagModifier": {
+        "position": "prefix",
+        "text": "Lighting",
+        "useSpace": true
+      }
+    },
+    {
+      "dependsOnRuleIds": [],
+      "instruction": "Describe palette/tonality. Key must be 'color and tone'. Include descriptors like 'warm monochrome', 'high-contrast neon'.",
+      "name": "Color and Tone",
+      "tagsList": [
+        "Vibrant",
+        "Muted",
+        "Monochrome",
+        "Warm",
+        "Cool",
+        "Pastel",
+        "High Contrast",
+        "Low Contrast",
+        "Black and White",
+        "Sepia",
+        "Complementary Colors"
+      ],
+      "tagsType": "example",
+      "type": "tags",
+      "tagModifier": {
+        "position": "prefix",
+        "text": "Color/Tone",
+        "useSpace": true
+      }
+    },
+    {
+      "dependsOnRuleIds": [],
+      "instruction": "Infer time-of-day or season only if visually obvious. Key 'time_or_season'.",
+      "name": "Time or Season",
+      "tagsList": [
+        "Golden Hour",
+        "Blue Hour",
+        "Midday",
+        "Night",
+        "Spring",
+        "Summer",
+        "Autumn",
+        "Winter"
+      ],
+      "tagsType": "example",
+      "type": "tags",
+      "tagModifier": {
+        "position": "prefix",
+        "text": "Time/Season",
+        "useSpace": true
+      }
+    },
+    {
+      "dependsOnRuleIds": [],
+      "instruction": "List concrete subjects & attributes (e.g., 'Subject: emerald evening gown', 'Subject: neon skyline'). Minimum 8 tags when detail permits. Key must be 'subjects'.",
+      "name": "Subjects",
+      "tagsList": [],
+      "tagsType": "none",
+      "type": "tags",
+      "tagModifier": {
+        "position": "prefix",
+        "text": "Subject",
+        "useSpace": true
+      }
+    },
+    {
+      "dependsOnRuleIds": [],
+      "instruction": "Provide 2–4 photographers or visual artists whose style matches. Key 'similar artists'.",
+      "name": "Similar Artists",
+      "tagsList": [],
+      "tagsType": "example",
+      "type": "tags",
+      "tagModifier": {
+        "position": "prefix",
+        "text": "Similar Artist",
+        "useSpace": true
+      }
+    }
+  ],
+  "skipRule": {
+    "tag": "Processed with AI Autotagger: Photography",
+    "shouldAddOnSkip": false
+  }
+}

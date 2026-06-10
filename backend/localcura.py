@@ -231,13 +231,13 @@ class Config:
         self.ollama_model = os.getenv("OLLAMA_MODEL", "qwen3-vl:8b")
         self.eagle_library_path = os.getenv("EAGLE_LIBRARY_PATH")
         self.photography_template_path = Path(
-            os.getenv("PHOTOGRAPHY_TEMPLATE", "photography_template")
+            os.getenv("PHOTOGRAPHY_TEMPLATE", "templates/photography_template")
         )
-        self.audio_template_path = Path(os.getenv("AUDIO_TEMPLATE", "audio_template"))
-        self.text_template_path = Path(os.getenv("TEXT_TEMPLATE", "text_template"))
-        self.video_template_path = Path(os.getenv("VIDEO_TEMPLATE", "video_template"))
+        self.audio_template_path = Path(os.getenv("AUDIO_TEMPLATE", "templates/audio_template"))
+        self.text_template_path = Path(os.getenv("TEXT_TEMPLATE", "templates/text_template"))
+        self.video_template_path = Path(os.getenv("VIDEO_TEMPLATE", "templates/video_template"))
         self.rename_template_path = Path(
-            os.getenv("RENAME_TEMPLATE", "rename_template")
+            os.getenv("RENAME_TEMPLATE", "templates/rename_template")
         )
 
 

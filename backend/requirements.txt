@@ -1,22 +1,22 @@
 # Core Web Framework
 fastapi==0.104.1
 uvicorn==0.23.2
-python-multipart==0.0.6
-requests==2.31.0
+python-multipart==0.0.27
+requests==2.33.0
 
 # Configuration
-python-dotenv==1.0.0
+python-dotenv==1.2.2
 
 # Image Processing
-pillow==10.3.0
+pillow==12.2.0
 pillow-avif-plugin==1.4.3
 pillow-heif==0.16.0
 
 # Video Processing (for video frame extraction)
-opencv-python-headless==4.8.0.76
+opencv-python-headless==4.8.1.78
 
 # AI/ML Models
-transformers==4.45.0
+transformers==5.0.0rc3
 accelerate==0.24.1
 qwen-vl-utils==0.0.8
 open-clip-torch==2.26.1

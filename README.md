@@ -1,62 +1,95 @@
-# LocalCura AI for Eagle (Ollama Edition)
+# CosmicTagger — Local-First AI Omnitagger for Eagle
 
 A powerful, local-first AI tagging and analysis plugin for [Eagle App](https://eagle.cool/).
 
-It uses **Ollama** running **Qwen 3 VL** to automatically:
+It uses **Ollama** running vision models (Qwen3-VL, LLaVA, etc.) to automatically:
 
-* **Tag** images with descriptive keywords.
-* **Describe** content in detail.
-* **Analyze** genre, lighting, and style.
-* **Suggest Names** for your files.
-* **Group Similar Images** to reduce LLM calls.
-* **Resume Interrupted Batches** - never lose progress.
-* **Tag Videos** - Extracts and analyzes representative frames from video files.
+- **Tag** images, video, audio, and text with descriptive keywords
+- **Describe** content in detail
+- **Analyze** genre, lighting, style, color palette, and technical quality
+- **Suggest Names** for your files
+- **Extract ComfyUI/SD Metadata** — reads AI generation prompts from PNGs
+- **Group Similar Images** — perceptual hashing reduces LLM calls by 60-80%
+- **Resume Interrupted Batches** — never lose progress
+- **Rate Content** — 1-5 star aesthetic scoring
 
-Everything runs **offline** via Ollama.
+Everything runs **offline** via Ollama. No cloud. No API keys.
 
-## ✨ New Features
+---
 
-### Adaptive Chunking
-Automatically adjusts batch size based on Ollama response times. Fast hardware = larger chunks, slower hardware = smaller chunks.
+## ✨ Features
+
+### Multi-Modal Tagging
+
+- **Images** — Full analysis with subjects, genre, lighting, color, mood, style
+- **Video** — Extracts 5 representative frames, merges tags across all frames
+- **Audio** — Extracts metadata (duration, bitrate, ID3 tags) and analyzes genre/mood/instrumentation
+- **Text** — Summarizes and categorizes documents
+
+### AI Metadata Extraction
+
+Automatically detects and extracts generation metadata from AI images:
+
+- **ComfyUI** workflow data and prompts
+- **Stable Diffusion WebUI** parameters (prompt, negative prompt, steps, sampler, seed, CFG)
+
+### Color Palette Analysis
+
+Extracts 5 dominant colors using PIL median-cut quantization. Classifies palette type:
+
+- Monochrome, Vibrant, Dark, Warm, Cool, Mixed
+
+### 3-Layer Tag Verification
+
+1. **Normalize** — lowercase, deduplicate, strip special chars
+2. **Filter** — remove stopwords, enforce min/max length, blacklist
+3. **Score** — quality score based on diversity, count, deduplication ratio
 
 ### Visual Similarity Grouping
-Uses perceptual hashing to identify similar images. Process one representative from each group and apply tags to all similar images - reduces LLM calls by 60-80% for duplicate/similar shots.
 
-### Video Analysis
-Extracts 5 representative frames from videos (MP4, MOV, AVI, MKV, etc.) and analyzes them like images. Tags are merged across all frames for comprehensive video metadata.
+Uses perceptual hashing (aHash) to find duplicate/similar images before processing. Tags from one representative are propagated to all duplicates.
 
-### Resume Capability
-If the browser crashes or you close the plugin mid-batch, you'll be prompted to resume where you left off when you reopen.
+### Adaptive Chunking
 
-### Smart Retry with UX
-Different error types get different retry strategies:
-- **503/Queue Full**: Exponential backoff with wait time estimates
-- **Timeouts**: Automatic quality reduction and retry
-- **Connection errors**: Clear messaging about Ollama status
+Automatically adjusts batch size based on Ollama response times. Fast GPU = larger chunks, slow CPU = smaller chunks.
 
-### Configuration UI
-Click the settings gear icon to customize:
-- Chunk size and delays
-- Enable/disable adaptive chunking
-- Toggle resume capability
-- Image compression settings
+### Performance Optimizations
 
-### Memory Management
-Fixed memory leaks when processing 1000+ images by properly managing object URLs.
+- **Response Cache** — SHA256-based LRU cache (500 entries). Same image = instant result.
+- **Server-Side Batch** — `POST /process/batch/paths` sends file paths only; backend reads directly from disk
+- **No Upload Overhead** — avoids copying image bytes over HTTP for local files
+
+### Security
+
+- **API Token Auth** — random 32-char token generated on init, passed via `X-API-Key`
+- **Restricted CORS** — only `localhost`, `file://`, and Eagle webview origins allowed
+- **PID Tracking** — kills orphaned Python servers on plugin load, force-kills on close
+
+### UX
+
+- **Results Panel** — per-item breakdown: tags, aesthetic score, color palette, AI metadata
+- **Model Selector** — auto-detects all Ollama models, shows vision capability, recommends best
+- **Keyboard Shortcut** — `Ctrl+Shift+T` triggers tagging without opening plugin window
+- **Eagle Progress Bar** — native `eagle.window.setProgress()` during batch
+- **Resume** — tracks processed item IDs (not just count), survives selection changes
+
+---
 
 ## Prerequisites
 
-* **Ollama**: [Download Ollama](https://ollama.com/) and ensure it is running (`http://localhost:11434`).
-* **Python 3.10+**
-* **Eagle App**
+- **Ollama**: [Download Ollama](https://ollama.com/) and ensure it is running (`http://localhost:11434`)
+- **Python 3.10+**
+- **Eagle App**
+
+---
 
 ## Installation
 
 ### 1. Clone the Repo
 
 ```bash
-git clone https://github.com/yourusername/localcura.git
-cd localcura
+git clone https://github.com/theCosmicCrafter/localcura-eagle-plugin.git
+cd localcura-eagle-plugin
 ```
 
 ### 2. Setup Python Environment
@@ -82,12 +115,14 @@ python check_requirements.py
    ```bash
    python backend/localcura.py --start-server --port 8005
    ```
-   * The system will automatically check for and pull `qwen3-vl` if it's missing.
 
+   - The system will automatically check for and pull `qwen3-vl` if it's missing.
 3. **In Eagle**:
-   * Load the unpacked plugin from the `eagle_plugin` folder.
-   * Select images and click "Analyze & Tag Selected".
-   * Use the settings gear to customize chunking behavior.
+   - Load the unpacked plugin from the `eagle_plugin` folder.
+   - Select items and click **"Analyze & Tag Selected"**.
+   - Use the settings gear to customize behavior.
+
+---
 
 ## Configuration
 
@@ -98,69 +133,80 @@ Create a `.env` file in the root directory:
 ```env
 OLLAMA_BASE_URL=http://localhost:11434/api
 OLLAMA_MODEL=qwen3-vl:8b
+
+# Optional toggles
+EXTRACT_METADATA=true
+EXTRACT_COLORS=true
+MAX_TAGS=30
+MIN_TAG_LENGTH=2
+MAX_TAG_LENGTH=25
 ```
 
 ### Plugin Settings
 
 Click the **⚙️ Settings** button in the plugin header to customize:
 
-| Setting | Default | Description |
-|---------|---------|-------------|
-| Chunk Size | 5 | Images processed per batch |
-| Chunk Delay | 5000ms | Wait time between batches |
-| Adaptive Chunking | On | Auto-adjust based on response times |
-| Resume | On | Save progress for crash recovery |
-| Compression | On | Resize large images before sending |
+| Setting           | Default | Description                               |
+| ----------------- | ------- | ----------------------------------------- |
+| Chunk Size        | 5       | Items processed per batch                 |
+| Chunk Delay       | 5000ms  | Wait time between batches                 |
+| Adaptive Chunking | On      | Auto-adjust based on response times       |
+| Resume            | On      | Save progress for crash recovery          |
+| Compression       | On      | Resize large images before sending        |
+| Extract Metadata  | On      | Read ComfyUI/SD data from PNGs            |
+| Extract Colors    | On      | Extract dominant color palette            |
+| Verify Tags       | On      | 3-layer tag cleaning                      |
+| Max Tags          | 30      | Limit tags per item                       |
+| AI Model          | Auto    | Select Ollama model (fetched dynamically) |
 
-### Ollama Optimization
-
-For best performance with 1000+ images:
-
-```bash
-# Increase Ollama's queue size (optional)
-export OLLAMA_MAX_QUEUE=50
-
-# Allow more parallel processing if you have GPU memory
-export OLLAMA_NUM_PARALLEL=2
-```
+---
 
 ## API Endpoints
 
-The backend provides these additional endpoints:
+| Endpoint                    | Method | Description                                        |
+| --------------------------- | ------ | -------------------------------------------------- |
+| `GET /health`               | GET    | Health check + model info                          |
+| `POST /process`             | POST   | Single file upload                                 |
+| `POST /process/batch`       | POST   | Multipart batch upload                             |
+| `POST /process/batch/paths` | POST   | Batch by file paths (fastest)                      |
+| `POST /similarity/group`    | POST   | Group similar images by perceptual hash            |
+| `GET /similarity/hash`      | GET    | Single image hash                                  |
+| `GET /models`               | GET    | List installed Ollama models with vision detection |
+| `GET /cache/stats`          | GET    | Cache metrics                                      |
+| `POST /cache/clear`         | POST   | Clear analysis cache                               |
 
-### Process Image
-`POST /process` - Analyze and tag a single image
-
-### Similarity Grouping
-`POST /similarity/group` - Group visually similar images
-```bash
-curl -X POST http://localhost:8005/similarity/group \
-  -F "files=@image1.jpg" \
-  -F "files=@image2.jpg" \
-  -F "threshold=8"
-```
-
-### Get Image Hash
-`GET /similarity/hash?file_path=/path/to/image.jpg`
+---
 
 ## Troubleshooting
 
 ### "Ollama queue full (503)"
-The plugin will automatically slow down and retry. You can adjust chunk delays in Settings.
+
+The plugin will automatically slow down and retry. Reduce chunk size in Settings.
+
+### "Cannot locate backend"
+
+The plugin auto-detects the backend path from `eagle.plugin.path`. If it fails, set the path manually in Settings.
 
 ### Browser crashes with 1000+ images
-Memory management is now fixed. If issues persist, reduce chunk size in Settings.
+
+Enable similarity grouping and use smaller chunk sizes.
 
 ### "Resume batch?" prompt on startup
+
 This is the resume feature working! Click OK to continue, Cancel to start fresh.
+
+---
 
 ## Performance Tips
 
 1. **Enable Similarity Grouping** for photo shoots with many similar shots
 2. **Use Adaptive Chunking** to let the plugin find the optimal speed
 3. **Resume** lets you safely process large batches across multiple sessions
-4. Image compression reduces upload time for high-res photos
+4. **Server-side batch paths** is 10x faster than individual uploads for local files
+5. **Cache** avoids re-analyzing identical images
+
+---
 
 ## License
 
-MIT License - feel free to modify and distribute.
+MIT License — feel free to modify and distribute.

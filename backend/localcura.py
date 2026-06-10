@@ -100,6 +100,10 @@ def clear_cache() -> None:
     _analysis_cache.clear()
     logger.info("Analysis cache cleared.")
 
+def clear_template_cache() -> None:
+    _template_cache.clear()
+    logger.info("Template cache cleared.")
+
 
 # Template cache to avoid disk reads on every request
 _template_cache: Dict[str, Dict[str, Any]] = {}
@@ -154,6 +158,15 @@ def render_prompt_from_template(
         "NEVER prefix tag values with category names like 'Subject:', 'Genre:', 'Lighting:', etc. "
         "For example, output 'black collar' NOT 'Subject: black collar', and 'portrait' NOT 'Genre: portrait'."
     )
+    lines.append("")
+    lines.append("EXAMPLE OUTPUT FORMAT (follow this exactly):")
+    lines.append('{"description": "A person in a leather jacket under neon lights.",')
+    lines.append(' "subjects": ["leather jacket", "neon lights", "urban street", "night portrait"],')
+    lines.append(' "genre": ["street photography", "portrait"],')
+    lines.append(' "lighting": ["neon", "low key", "artificial"],')
+    lines.append(' "color_and_tone": ["high contrast", "cool", "vibrant"],')
+    lines.append(' "time_or_season": ["night"],')
+    lines.append(' "similar_artists": ["Brandon Woelfel", "Neon Dreams"]}')
     return "\n".join(lines)
 
 
@@ -302,7 +315,10 @@ class TagVerifier:
     def _normalize(self, tags: List[str]) -> List[str]:
         out = []
         for t in tags:
-            s = str(t).strip().lower()
+            s = str(t).strip()
+            # Strip any "Word: " prefix first
+            s = re.sub(r"^[A-Za-z][A-Za-z\s]*\s*[:\-]\s*", "", s)
+            s = s.lower()
             s = re.sub(r'[^a-z0-9\s\-/#]', '', s)
             s = re.sub(r'\s+', ' ', s)
             if s:
@@ -584,9 +600,10 @@ class OllamaClient:
 
             try:
                 data = json.loads(content)
+                logger.info("Ollama raw response keys: %s", list(data.keys()))
                 return data
             except json.JSONDecodeError:
-                logger.error(f"Failed to parse JSON from Ollama: {content}")
+                logger.error("Failed to parse JSON from Ollama. Raw: %s", content[:500])
                 return {"error": "Invalid JSON response", "raw": content}
 
         except requests.exceptions.Timeout:
@@ -995,7 +1012,8 @@ class LocalCuraApp:
 
 def sanitize_tags(tag_list: list[str]) -> list[str]:
     """Final safety pass: strip any remaining prefix patterns from tags."""
-    PREFIX_PATTERNS = [
+    # Specific known prefixes
+    SPECIFIC_PATTERNS = [
         r"^Subject\s*[:\-]\s*",
         r"^Genre\s*[:\-]\s*",
         r"^Lighting\s*[:\-]\s*",
@@ -1017,6 +1035,9 @@ def sanitize_tags(tag_list: list[str]) -> list[str]:
         r"^color_and_tone\s*[:\-]\s*",
         r"^time_or_season\s*[:\-]\s*",
     ]
+    # Catch-all: any word followed by colon at start
+    CATCH_ALL = r"^[A-Za-z][A-Za-z\s]*\s*[:\-]\s*"
+    
     out = []
     for tag in tag_list:
         if not isinstance(tag, str):
@@ -1024,11 +1045,16 @@ def sanitize_tags(tag_list: list[str]) -> list[str]:
         tag = str(tag).strip()
         if not tag:
             continue
-        for pattern in PREFIX_PATTERNS:
+        original = tag
+        for pattern in SPECIFIC_PATTERNS:
             tag = re.sub(pattern, "", tag, flags=re.IGNORECASE)
+        # Catch-all for any remaining "Word: " prefix
+        tag = re.sub(CATCH_ALL, "", tag)
         tag = tag.strip()
         if tag and tag not in out:
             out.append(tag)
+        elif original != tag:
+            logger.debug("sanitize_tags stripped prefix from '%s' -> '%s'", original, tag)
     return out
 
 
@@ -1038,8 +1064,9 @@ def sanitize_tags(tag_list: list[str]) -> list[str]:
 
 app_instance = LocalCuraApp()
 
-# Clear analysis cache on startup to ensure fresh results (old prefixed tags purged)
+# Clear ALL caches on startup to ensure fresh results
 clear_cache()
+clear_template_cache()
 
 # Create FastAPI app
 app = FastAPI(title="LocalCura qwen3-vl")
